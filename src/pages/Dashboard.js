@@ -13,6 +13,7 @@ export default function Dashboard() {
   const [fses, setFses] = useState([]);
   const [fsesLoading, setFsesLoading] = useState(false);
   const [showFSEModal, setShowFSEModal] = useState(false);
+  const [fseStats, setFseStats] = useState({});
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [kpis, setKpis] = useState(null);
   const [kpiModal, setKpiModal]       = useState(null);  // { title, type, data, loading }
@@ -85,6 +86,7 @@ export default function Dashboard() {
     setShowFSEModal(true);
     setFsesLoading(true);
     setFses([]);
+    setFseStats({});
 
     const token = localStorage.getItem('token');
     try {
@@ -94,6 +96,26 @@ export default function Dashboard() {
       const data = await res.json();
       if (Array.isArray(data)) {
         setFses(data);
+        // Fetch ALL-TIME form stats for FSEs (no date filter)
+        const statsRes = await fetch(`${API_BASE}/api/manager/kpi-detail?type=totalForms&dateFilter=alltime`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const allForms = await statsRes.json();
+        if (Array.isArray(allForms)) {
+          const statsMap = {};
+          allForms.forEach(f => {
+            const name = (f.fse || '').trim().toLowerCase();
+            if (!statsMap[name]) statsMap[name] = { total: 0, fullyVerified: 0, partiallyDone: 0, notInterested: 0, notVerified: 0 };
+            statsMap[name].total++;
+            const vs = (f.verificationStatus || '').trim();
+            const st = (f.status || '').trim();
+            if (vs === 'Fully Verified') statsMap[name].fullyVerified++;
+            else if (vs === 'Partially Done') statsMap[name].partiallyDone++;
+            else if (st === 'Not Interested') statsMap[name].notInterested++;
+            else statsMap[name].notVerified++;
+          });
+          setFseStats(statsMap);
+        }
       }
     } catch (err) {
       console.error('Failed to load FSEs:', err);
@@ -106,6 +128,7 @@ export default function Dashboard() {
     setShowFSEModal(false);
     setSelectedTL(null);
     setFses([]);
+    setFseStats({});
   };
 
   const fetchKpis = (token, df, fd, td, sy, sm) => {
@@ -711,6 +734,29 @@ export default function Dashboard() {
                           {fse.location && <span>📍 {fse.location}</span>}
                           {fse.position && <span>💼 {fse.position}</span>}
                         </div>
+                        {/* Form stats */}
+                        {fseStats[(fse.name||'').trim().toLowerCase()] && (() => {
+                          const s = fseStats[(fse.name||'').trim().toLowerCase()];
+                          return (
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                              {[
+                                { label: 'Total',    value: s.total,          color: '#1565c0', bg: '#e3f2fd' },
+                                { label: '✅ Verified', value: s.fullyVerified, color: '#2e7d32', bg: '#e6f4ea' },
+                                { label: '◑ Partial', value: s.partiallyDone, color: '#e65100', bg: '#fff3e0' },
+                                { label: '❌ Not Int', value: s.notInterested, color: '#c62828', bg: '#fdecea' },
+                                { label: '⬜ Unverified', value: s.notVerified, color: '#555',   bg: '#f5f5f5' },
+                              ].map(stat => (
+                                <span key={stat.label} style={{
+                                  padding: '2px 8px', borderRadius: 20, fontSize: 10, fontWeight: 700,
+                                  background: stat.bg, color: stat.color,
+                                  border: `1px solid ${stat.color}30`,
+                                }}>
+                                  {stat.label}: {stat.value}
+                                </span>
+                              ))}
+                            </div>
+                          );
+                        })()}
                       </div>
                       {fse.status && (
                         <span style={{
