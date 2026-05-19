@@ -14,6 +14,9 @@ export default function Dashboard() {
   const [fsesLoading, setFsesLoading] = useState(false);
   const [showFSEModal, setShowFSEModal] = useState(false);
   const [fseStats, setFseStats] = useState({});
+  const [myForms, setMyForms] = useState([]);
+  const [myFormsLoading, setMyFormsLoading] = useState(false);
+  const [showMyForms, setShowMyForms] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [kpis, setKpis] = useState(null);
   const [kpiModal, setKpiModal]       = useState(null);  // { title, type, data, loading }
@@ -70,9 +73,32 @@ export default function Dashboard() {
       .then(r => r.json())
       .then(data => setKpis(data))
       .catch(err => console.error('Failed to load KPIs:', err));
+
+    // Fetch manager's own forms
+    setMyFormsLoading(true);
+    const cachedMyForms = localStorage.getItem('manager_my_forms');
+    if (cachedMyForms) {
+      try { setMyForms(JSON.parse(cachedMyForms)); setMyFormsLoading(false); } catch {}
+    }
+    fetch(`${API_BASE}/api/manager/my-forms`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          setMyForms(data);
+          try { localStorage.setItem('manager_my_forms', JSON.stringify(data)); } catch {}
+        }
+      })
+      .catch(err => console.error('Failed to load my forms:', err))
+      .finally(() => setMyFormsLoading(false));
   }, [navigate]);
 
   const handleLogout = () => {
+    // Clear all manager caches
+    Object.keys(localStorage).forEach(k => {
+      if (k.startsWith('fse_stats_') || k === 'manager_my_forms') localStorage.removeItem(k);
+    });
     localStorage.removeItem('token');
     localStorage.removeItem('manager');
     navigate('/');
@@ -84,11 +110,37 @@ export default function Dashboard() {
   const handleFSEClick = async (tl) => {
     setSelectedTL(tl);
     setShowFSEModal(true);
-    setFsesLoading(true);
-    setFses([]);
     setFseStats({});
 
     const token = localStorage.getItem('token');
+    const cacheKey = `fse_stats_${tl._id}`;
+
+    // Load from cache instantly (max 30 min old)
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) {
+      try {
+        const { fses: cachedFses, stats: cachedStats, ts } = JSON.parse(cached);
+        const age = Date.now() - (ts || 0);
+        if (age < 30 * 60 * 1000) { // 30 minutes
+          setFses(cachedFses);
+          setFseStats(cachedStats);
+          setFsesLoading(false);
+        } else {
+          // Cache expired — clear it
+          localStorage.removeItem(cacheKey);
+          setFsesLoading(true);
+          setFses([]);
+        }
+      } catch {
+        setFsesLoading(true);
+        setFses([]);
+      }
+    } else {
+      setFsesLoading(true);
+      setFses([]);
+    }
+
+    // Always fetch fresh in background
     try {
       const res = await fetch(`${API_BASE}/api/manager/tl/${tl._id}/fses`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -96,25 +148,54 @@ export default function Dashboard() {
       const data = await res.json();
       if (Array.isArray(data)) {
         setFses(data);
-        // Fetch ALL-TIME form stats for FSEs (no date filter)
+        setFsesLoading(false);
+
+        // Fetch ALL-TIME form stats
         const statsRes = await fetch(`${API_BASE}/api/manager/kpi-detail?type=totalForms&dateFilter=alltime`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         const allForms = await statsRes.json();
         if (Array.isArray(allForms)) {
+          let verifyMap = {};
+          try {
+            const vRes = await fetch(`${API_BASE}/api/verify/bulk-admin`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+              body: JSON.stringify({
+                phones:   allForms.map(f => f.phone || ''),
+                names:    allForms.map(f => f.customer || ''),
+                products: allForms.map(f => (f.product || '').toLowerCase().trim()),
+                months:   allForms.map(f => f._date ? new Date(f._date).toLocaleString('en-US', { month: 'long', year: 'numeric' }) : ''),
+              }),
+            });
+            verifyMap = await vRes.json();
+          } catch {}
+
           const statsMap = {};
           allForms.forEach(f => {
             const name = (f.fse || '').trim().toLowerCase();
             if (!statsMap[name]) statsMap[name] = { total: 0, fullyVerified: 0, partiallyDone: 0, notInterested: 0, notVerified: 0 };
             statsMap[name].total++;
-            const vs = (f.verificationStatus || '').trim();
+            const product = (f.product || '').toLowerCase().trim();
+            const vKey = product ? `${f.phone}__${product}` : f.phone;
+            const verification = verifyMap[vKey];
             const st = (f.status || '').trim();
-            if (vs === 'Fully Verified') statsMap[name].fullyVerified++;
-            else if (vs === 'Partially Done') statsMap[name].partiallyDone++;
-            else if (st === 'Not Interested') statsMap[name].notInterested++;
-            else statsMap[name].notVerified++;
+            if (verification) {
+              if (verification.status === 'Fully Verified') statsMap[name].fullyVerified++;
+              else if (verification.status === 'Partially Done') statsMap[name].partiallyDone++;
+              else if (st === 'Not Interested') statsMap[name].notInterested++;
+              else statsMap[name].notVerified++;
+            } else {
+              if (st === 'Not Interested') statsMap[name].notInterested++;
+              else statsMap[name].notVerified++;
+            }
           });
           setFseStats(statsMap);
+
+          // Save to cache
+          try {
+            localStorage.setItem(cacheKey, JSON.stringify({ fses: data, stats: statsMap, ts: Date.now() }));
+          } catch {}
         }
       }
     } catch (err) {
@@ -244,11 +325,100 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* Fill Merchant Visit Form card */}
+        <div style={{ marginBottom: 20 }}>
+          <p className="section-title">Actions</p>
+          <Link to="/merchant-form" style={{ textDecoration: 'none' }}>
+            <div style={{
+              background: '#fff', borderRadius: 14, padding: '16px 20px',
+              border: '1.5px solid #e8f0e8', display: 'flex', alignItems: 'center',
+              justifyContent: 'space-between', cursor: 'pointer',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
+              transition: 'all 0.2s',
+            }}
+              onMouseOver={e => { e.currentTarget.style.borderColor = 'var(--green-dark)'; e.currentTarget.style.background = '#f0faf2'; }}
+              onMouseOut={e  => { e.currentTarget.style.borderColor = '#e8f0e8';           e.currentTarget.style.background = '#fff'; }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                <div style={{
+                  width: 44, height: 44, borderRadius: 10, background: '#e6f4ea',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22,
+                }}>📋</div>
+                <div>
+                  <div style={{ fontWeight: 800, fontSize: 15, color: 'var(--green-dark)' }}>Fill Merchant Visit Form</div>
+                  <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>Submit details after a merchant meeting</div>
+                </div>
+              </div>
+              <span style={{ color: '#aaa', fontSize: 18 }}>›</span>
+            </div>
+          </Link>
+        </div>
+
+        {/* My Forms section */}
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+            <p className="section-title" style={{ margin: 0 }}>My Merchant Forms ({myForms.length})</p>
+            <button
+              onClick={() => setShowMyForms(p => !p)}
+              style={{ padding: '6px 14px', borderRadius: 8, border: '1.5px solid var(--green-dark)', background: '#fff', color: 'var(--green-dark)', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
+            >
+              {showMyForms ? 'Hide' : 'Show'}
+            </button>
+          </div>
+          {showMyForms && (
+            myFormsLoading ? (
+              <div className="merchants-loading">Loading forms…</div>
+            ) : myForms.length === 0 ? (
+              <div style={{ background: '#fff', borderRadius: 12, padding: '28px 20px', textAlign: 'center', border: '1.5px dashed #dde8dd', color: '#aaa' }}>
+                <div style={{ fontSize: 32, marginBottom: 8 }}>📋</div>
+                <p style={{ fontSize: 14, fontWeight: 600 }}>No forms submitted yet</p>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {myForms.map((f, i) => {
+                  const statusColor = f.status === 'Ready for Onboarding' ? { bg: '#e6f4ea', color: '#2e7d32' } :
+                    f.status === 'Not Interested' ? { bg: '#fdecea', color: '#c62828' } :
+                    { bg: '#fff3e0', color: '#e65100' };
+                  return (
+                    <div key={f._id || i} style={{
+                      background: '#fff', borderRadius: 12, padding: '14px 16px',
+                      border: '1.5px solid #e8f0e8', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+                    }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-dark)', marginBottom: 4 }}>{f.customerName}</div>
+                        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 12, color: '#888' }}>
+                          {f.customerNumber && <span>📱 {f.customerNumber}</span>}
+                          {f.location && <span>📍 {f.location}</span>}
+                          {(f.formFillingFor || f.brand) && <span>📦 {f.formFillingFor || f.brand}</span>}
+                          {f.createdAt && <span>📅 {new Date(f.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</span>}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                        <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 10, fontWeight: 700, background: statusColor.bg, color: statusColor.color, whiteSpace: 'nowrap' }}>
+                          {f.status}
+                        </span>
+                        {f.verificationStatus && f.verificationStatus !== 'Not Found' && (
+                          <span style={{
+                            padding: '3px 10px', borderRadius: 20, fontSize: 10, fontWeight: 700,
+                            background: f.verificationStatus === 'Fully Verified' ? '#e6f4ea' : f.verificationStatus === 'Partially Done' ? '#fff3e0' : '#f5f5f5',
+                            color: f.verificationStatus === 'Fully Verified' ? '#2e7d32' : f.verificationStatus === 'Partially Done' ? '#e65100' : '#888',
+                          }}>
+                            {f.verificationStatus}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )
+          )}
+        </div>
+
         {/* KPI Cards */}
         {kpis && (
           <>
-            <p className="section-title" style={{ marginTop: 28 }}>Team Overview</p>
-            <div style={{ marginBottom: 12 }}>
+            <p className="section-title" style={{ marginTop: 28 }}>Team Overview</p>            <div style={{ marginBottom: 12 }}>
               <div className="date-filter-bar">
                 {['all','today','week'].map(f => (
                   <button key={f} className={`date-filter-btn${dateFilter === f ? ' active' : ''}`}
