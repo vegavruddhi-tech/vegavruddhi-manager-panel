@@ -50,6 +50,7 @@ export default function Profile() {
   useEffect(() => { 
     loadProfile(); 
     loadMyRequest(); 
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navigate]);
 
   const handleLogout = () => {
