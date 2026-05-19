@@ -20,7 +20,7 @@ export default function Dashboard() {
   const [dateFilter, setDateFilter]   = useState('all');
   const [fromDate,   setFromDate]     = useState('');
   const [toDate,     setToDate]       = useState('');
-  const [selYear,    setSelYear]      = useState('');
+  const [selYear,    setSelYear]      = useState(new Date().getFullYear().toString());
   const [selMonth,   setSelMonth]     = useState(new Date().getMonth().toString());
 
   useEffect(() => {
@@ -265,6 +265,24 @@ export default function Dashboard() {
                   </select>
                   <span style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: '#40916c', fontSize: 12 }}>▼</span>
                 </div>
+                <button
+                  onClick={() => {
+                    const currentYear = new Date().getFullYear().toString();
+                    const currentMonth = new Date().getMonth().toString();
+                    setDateFilter('all');
+                    setFromDate('');
+                    setToDate('');
+                    setSelYear(currentYear);
+                    setSelMonth(currentMonth);
+                    fetchKpis(localStorage.getItem('token'), 'all', '', '', currentYear, currentMonth);
+                  }}
+                  style={{
+                    padding: '10px 16px', borderRadius: 10, border: '1.5px solid #e53935',
+                    background: '#fff', color: '#e53935', fontSize: 13, fontWeight: 700,
+                    cursor: 'pointer', whiteSpace: 'nowrap'
+                  }}>
+                  ↺ Reset
+                </button>
               </div>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 8 }}>
