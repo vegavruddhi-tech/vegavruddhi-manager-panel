@@ -41,11 +41,15 @@ export default function Dashboard() {
     fetch(`${API_BASE}/api/manager/profile`, {
       headers: { Authorization: `Bearer ${token}` },
     })
-      .then(r => r.json())
+      .then(r => {
+        if (r.status === 401) { handleUnauthorized(); return null; }
+        return r.json();
+      })
       .then(data => {
-        if (data.manager) {
-          setManager(data.manager);
-          localStorage.setItem('manager', JSON.stringify(data.manager));
+        if (!data) return;
+        if (data._id) {
+          setManager(data);
+          localStorage.setItem('manager', JSON.stringify(data));
         } else if (data.message) {
           setError(data.message);
         }
@@ -96,6 +100,15 @@ export default function Dashboard() {
 
   const handleLogout = () => {
     // Clear all manager caches
+    Object.keys(localStorage).forEach(k => {
+      if (k.startsWith('fse_stats_') || k === 'manager_my_forms') localStorage.removeItem(k);
+    });
+    localStorage.removeItem('token');
+    localStorage.removeItem('manager');
+    navigate('/');
+  };
+
+  const handleUnauthorized = () => {
     Object.keys(localStorage).forEach(k => {
       if (k.startsWith('fse_stats_') || k === 'manager_my_forms') localStorage.removeItem(k);
     });

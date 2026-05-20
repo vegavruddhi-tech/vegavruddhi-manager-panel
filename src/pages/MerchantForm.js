@@ -144,6 +144,12 @@ export default function MerchantForm() {
         body: JSON.stringify(payload),
       });
       const data = await res.json();
+      if (res.status === 401) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('manager');
+        navigate('/');
+        return;
+      }
       if (res.status === 409 && data.duplicate) {
         setDupModal({ name: customerName, existingId: data.existingId });
         return;
