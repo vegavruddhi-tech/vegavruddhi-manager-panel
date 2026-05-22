@@ -1,6 +1,25 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { API_BASE } from '../api';
+import TideMerchantTimeline from '../components/TideMerchantTimeline';
+
+const POINTS_MAP = {
+  'Tide': 2,
+  'Tide MSME': 0.3,
+  'Tide Insurance': 1,
+  'Tide Credit Card': 1,
+  'Tide BT': 1,
+};
+
+const normalizeProduct = (product) => {
+  const p = (product || '').toLowerCase().trim();
+  if (p === 'tide insurance' || p === 'insurance') return 'Tide Insurance';
+  if (p === 'tide' || p === 'tide onboarding') return 'Tide';
+  if (p === 'msme' || p === 'tide msme') return 'Tide MSME';
+  if (p === 'tide credit card' || p === 'credit card') return 'Tide Credit Card';
+  if (p === 'tide bt' || p === 'bt') return 'Tide BT';
+  return product;
+};
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -14,9 +33,17 @@ export default function Dashboard() {
   const [fsesLoading, setFsesLoading] = useState(false);
   const [showFSEModal, setShowFSEModal] = useState(false);
   const [fseStats, setFseStats] = useState({});
+  const [fseForms, setFseForms] = useState([]);
+  const [fseVerifyMap, setFseVerifyMap] = useState({});
+  const [selectedFSE, setSelectedFSE] = useState(null);
+  const [verifyDetail, setVerifyDetail] = useState(null); // { customerName, status, checks }
   const [myForms, setMyForms] = useState([]);
   const [myFormsLoading, setMyFormsLoading] = useState(false);
   const [showMyForms, setShowMyForms] = useState(false);
+  const [selectedForm, setSelectedForm] = useState(null);
+  const [myFormsVerifyMap, setMyFormsVerifyMap] = useState({});
+  const [tlFormsModal, setTlFormsModal] = useState(null);
+  const [productFilter, setProductFilter] = useState('all'); // { tl, forms, verifyMap, loading }
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [kpis, setKpis] = useState(null);
   const [kpiModal, setKpiModal]       = useState(null);  // { title, type, data, loading }
@@ -70,12 +97,51 @@ export default function Dashboard() {
       .catch(err => console.error('Failed to load TLs:', err))
       .finally(() => setTlsLoading(false));
 
-    // Fetch KPIs
+    // Fetch KPIs (show cached instantly, refresh in background)
+    const cachedKpis = localStorage.getItem('manager_kpis');
+    if (cachedKpis) { try { setKpis(JSON.parse(cachedKpis)); } catch {} }
     fetch(`${API_BASE}/api/manager/kpis`, {
       headers: { Authorization: `Bearer ${token}` },
     })
-      .then(r => r.json())
-      .then(data => setKpis(data))
+      .then(r => {
+        if (r.status === 401) { handleUnauthorized(); return null; }
+        return r.json();
+      })
+      .then(data => {
+        if (data) {
+          setKpis(data);
+          try { localStorage.setItem('manager_kpis', JSON.stringify(data)); } catch {}
+          // Background: update verification counts after page renders
+          setTimeout(async () => {
+            try {
+              const formsRes = await fetch(`${API_BASE}/api/manager/kpi-detail?type=totalForms`, { headers: { Authorization: `Bearer ${token}` } });
+              const allForms = await formsRes.json();
+              if (Array.isArray(allForms) && allForms.length > 0) {
+                const vRes = await fetch(`${API_BASE}/api/verify/bulk-cached`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                  body: JSON.stringify({
+                    phones: allForms.map(f => f.phone || ''),
+                    names: allForms.map(f => f.customer || ''),
+                    products: allForms.map(f => (f.product || '').toLowerCase().trim()),
+                    months: allForms.map(f => f._date ? new Date(f._date).toLocaleString('en-US', { month: 'long', year: 'numeric' }) : ''),
+                  }),
+                });
+                const vm = await vRes.json();
+                let fv = 0, pd = 0;
+                allForms.forEach(f => {
+                  const product = (f.product || '').toLowerCase().trim();
+                  const vKey = product ? `${f.phone}__${product}` : f.phone;
+                  const status = vm[vKey]?.status;
+                  if (status === 'Fully Verified') fv++;
+                  else if (status === 'Partially Done') pd++;
+                });
+                setKpis(prev => prev ? { ...prev, fullyVerified: fv, partiallyDone: pd } : prev);
+              }
+            } catch {}
+          }, 500);
+        }
+      })
       .catch(err => console.error('Failed to load KPIs:', err));
 
     // Fetch manager's own forms
@@ -88,10 +154,27 @@ export default function Dashboard() {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(r => r.json())
-      .then(data => {
+      .then(async (data) => {
         if (Array.isArray(data)) {
           setMyForms(data);
           try { localStorage.setItem('manager_my_forms', JSON.stringify(data)); } catch {}
+          // Fetch verification for my forms
+          if (data.length > 0) {
+            try {
+              const vRes = await fetch(`${API_BASE}/api/verify/bulk-cached`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                body: JSON.stringify({
+                  phones: data.map(f => f.customerNumber || ''),
+                  names: data.map(f => f.customerName || ''),
+                  products: data.map(f => (f.formFillingFor || f.tideProduct || f.brand || '').toLowerCase().trim()),
+                  months: data.map(f => f.createdAt ? new Date(f.createdAt).toLocaleString('en-US', { month: 'long', year: 'numeric' }) : ''),
+                }),
+              });
+              const vm = await vRes.json();
+              setMyFormsVerifyMap(vm || {});
+            } catch {}
+          }
         }
       })
       .catch(err => console.error('Failed to load my forms:', err))
@@ -101,7 +184,7 @@ export default function Dashboard() {
   const handleLogout = () => {
     // Clear all manager caches
     Object.keys(localStorage).forEach(k => {
-      if (k.startsWith('fse_stats_') || k === 'manager_my_forms') localStorage.removeItem(k);
+      if (k.startsWith('fse_stats_') || k === 'manager_my_forms' || k === 'manager_kpis') localStorage.removeItem(k);
     });
     localStorage.removeItem('token');
     localStorage.removeItem('manager');
@@ -132,84 +215,87 @@ export default function Dashboard() {
     const cached = localStorage.getItem(cacheKey);
     if (cached) {
       try {
-        const { fses: cachedFses, stats: cachedStats, ts } = JSON.parse(cached);
+        const { fses: cachedFses, stats: cachedStats, forms: cachedForms, ts } = JSON.parse(cached);
         const age = Date.now() - (ts || 0);
-        if (age < 30 * 60 * 1000) { // 30 minutes
+        if (age < 30 * 60 * 1000) {
           setFses(cachedFses);
           setFseStats(cachedStats);
+          setFseForms(cachedForms || []);
           setFsesLoading(false);
         } else {
-          // Cache expired — clear it
           localStorage.removeItem(cacheKey);
           setFsesLoading(true);
           setFses([]);
+          setFseForms([]);
         }
       } catch {
         setFsesLoading(true);
         setFses([]);
+        setFseForms([]);
       }
     } else {
       setFsesLoading(true);
       setFses([]);
+      setFseForms([]);
     }
 
-    // Always fetch fresh in background
+    // Fetch fresh
     try {
-      const res = await fetch(`${API_BASE}/api/manager/tl/${tl._id}/fses`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (Array.isArray(data)) {
-        setFses(data);
-        setFsesLoading(false);
+      const [fseRes, formsRes] = await Promise.all([
+        fetch(`${API_BASE}/api/manager/tl/${tl._id}/fses`, { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(`${API_BASE}/api/manager/tl/${tl._id}/fse-forms`, { headers: { Authorization: `Bearer ${token}` } }),
+      ]);
+      const fseData = await fseRes.json();
+      const formsData = await formsRes.json();
 
-        // Fetch ALL-TIME form stats
-        const statsRes = await fetch(`${API_BASE}/api/manager/kpi-detail?type=totalForms&dateFilter=alltime`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const allForms = await statsRes.json();
-        if (Array.isArray(allForms)) {
-          let verifyMap = {};
-          try {
-            const vRes = await fetch(`${API_BASE}/api/verify/bulk-admin`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-              body: JSON.stringify({
-                phones:   allForms.map(f => f.phone || ''),
-                names:    allForms.map(f => f.customer || ''),
-                products: allForms.map(f => (f.product || '').toLowerCase().trim()),
-                months:   allForms.map(f => f._date ? new Date(f._date).toLocaleString('en-US', { month: 'long', year: 'numeric' }) : ''),
-              }),
-            });
-            verifyMap = await vRes.json();
-          } catch {}
+      if (Array.isArray(fseData)) setFses(fseData);
+      if (Array.isArray(formsData)) setFseForms(formsData);
+      setFsesLoading(false);
 
-          const statsMap = {};
-          allForms.forEach(f => {
-            const name = (f.fse || '').trim().toLowerCase();
-            if (!statsMap[name]) statsMap[name] = { total: 0, fullyVerified: 0, partiallyDone: 0, notInterested: 0, notVerified: 0 };
-            statsMap[name].total++;
-            const product = (f.product || '').toLowerCase().trim();
-            const vKey = product ? `${f.phone}__${product}` : f.phone;
-            const verification = verifyMap[vKey];
-            const st = (f.status || '').trim();
-            if (verification) {
-              if (verification.status === 'Fully Verified') statsMap[name].fullyVerified++;
-              else if (verification.status === 'Partially Done') statsMap[name].partiallyDone++;
-              else if (st === 'Not Interested') statsMap[name].notInterested++;
-              else statsMap[name].notVerified++;
-            } else {
-              if (st === 'Not Interested') statsMap[name].notInterested++;
-              else statsMap[name].notVerified++;
-            }
+      // Fetch verification
+      if (Array.isArray(formsData) && formsData.length > 0) {
+        let verifyMap = {};
+        try {
+          const vRes = await fetch(`${API_BASE}/api/verify/bulk-admin`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify({
+              phones:   formsData.map(f => f.customerNumber || ''),
+              names:    formsData.map(f => f.customerName || ''),
+              products: formsData.map(f => (f.formFillingFor || f.tideProduct || f.brand || '').toLowerCase().trim()),
+              months:   formsData.map(f => f.createdAt ? new Date(f.createdAt).toLocaleString('en-US', { month: 'long', year: 'numeric' }) : ''),
+            }),
           });
-          setFseStats(statsMap);
+          verifyMap = await vRes.json();
+        } catch {}
 
-          // Save to cache
-          try {
-            localStorage.setItem(cacheKey, JSON.stringify({ fses: data, stats: statsMap, ts: Date.now() }));
-          } catch {}
-        }
+        // Build stats per FSE
+        const statsMap = {};
+        formsData.forEach(f => {
+          const name = (f.employeeName || '').trim().toLowerCase();
+          if (!statsMap[name]) statsMap[name] = { total: 0, fullyVerified: 0, partiallyDone: 0, notInterested: 0, notVerified: 0 };
+          statsMap[name].total++;
+          const product = (f.formFillingFor || f.tideProduct || f.brand || '').toLowerCase().trim();
+          const vKey = product ? `${f.customerNumber}__${product}` : f.customerNumber;
+          const verification = verifyMap[vKey];
+          const st = (f.status || '').trim();
+          if (verification) {
+            if (verification.status === 'Fully Verified') statsMap[name].fullyVerified++;
+            else if (verification.status === 'Partially Done') statsMap[name].partiallyDone++;
+            else if (st === 'Not Interested') statsMap[name].notInterested++;
+            else statsMap[name].notVerified++;
+          } else {
+            if (st === 'Not Interested') statsMap[name].notInterested++;
+            else statsMap[name].notVerified++;
+          }
+        });
+        setFseStats(statsMap);
+        setFseVerifyMap(verifyMap);
+
+        // Cache
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify({ fses: fseData, stats: statsMap, forms: formsData, ts: Date.now() }));
+        } catch {}
       }
     } catch (err) {
       console.error('Failed to load FSEs:', err);
@@ -223,6 +309,42 @@ export default function Dashboard() {
     setSelectedTL(null);
     setFses([]);
     setFseStats({});
+    setFseForms([]);
+    setFseVerifyMap({});
+    setSelectedFSE(null);
+  };
+
+  const handleTLFormsClick = async (tl) => {
+    setTlFormsModal({ tl, forms: [], verifyMap: {}, loading: true });
+    const token = localStorage.getItem('token');
+    try {
+      const res = await fetch(`${API_BASE}/api/manager/tl/${tl._id}/tl-forms`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const forms = await res.json();
+      if (!Array.isArray(forms)) { setTlFormsModal(prev => ({ ...prev, loading: false })); return; }
+
+      // Fetch verification
+      let verifyMap = {};
+      if (forms.length > 0) {
+        try {
+          const vRes = await fetch(`${API_BASE}/api/verify/bulk-admin`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify({
+              phones:   forms.map(f => f.customerNumber || ''),
+              names:    forms.map(f => f.customerName || ''),
+              products: forms.map(f => (f.formFillingFor || f.tideProduct || f.brand || '').toLowerCase().trim()),
+              months:   forms.map(f => f.createdAt ? new Date(f.createdAt).toLocaleString('en-US', { month: 'long', year: 'numeric' }) : ''),
+            }),
+          });
+          verifyMap = await vRes.json();
+        } catch {}
+      }
+      setTlFormsModal({ tl, forms, verifyMap, loading: false });
+    } catch {
+      setTlFormsModal(prev => ({ ...prev, loading: false }));
+    }
   };
 
   const fetchKpis = (token, df, fd, td, sy, sm) => {
@@ -324,17 +446,43 @@ export default function Dashboard() {
 
         {/* Welcome card */}
         {manager && (
-          <div className="welcome-card">
-            <div className="welcome-avatar">
+          <div className="welcome-card" style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div className="welcome-avatar" style={{ flexShrink: 0 }}>
               {manager.photoUrl
                 ? <img src={manager.photoUrl} alt={manager.name} />
                 : initials(manager.name)
               }
             </div>
-            <div className="welcome-text">
-              <h2>Welcome, {manager.name} 👋</h2>
-              <p>Manager Portal — Vegavruddhi Pvt. Ltd.</p>
+            <div className="welcome-text" style={{ flex: 1, minWidth: 0 }}>
+              <h2 style={{ fontSize: 16, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', margin: 0 }}>Welcome, {manager.name} 👋</h2>
+              <p style={{ fontSize: 11, margin: '2px 0 0', opacity: 0.85 }}>Manager Portal — Vegavruddhi Pvt. Ltd.</p>
             </div>
+            {/* Total Points badge */}
+            {(() => {
+              let totalPoints = 0;
+              myForms.forEach(f => {
+                if (f.status === 'Ready for Onboarding') {
+                  const product = f.formFillingFor || f.tideProduct || f.brand || '';
+                  const productLower = product.toLowerCase().trim();
+                  const vKey = productLower ? `${f.customerNumber}__${productLower}` : f.customerNumber;
+                  const vStatus = myFormsVerifyMap[vKey]?.status;
+                  if (vStatus === 'Fully Verified') {
+                    totalPoints += POINTS_MAP[normalizeProduct(product)] || 0;
+                  }
+                }
+              });
+              totalPoints = Math.round(totalPoints * 10) / 10;
+              return (
+                <div style={{
+                  background: 'rgba(255,255,255,0.15)', border: '1.5px solid rgba(255,255,255,0.3)',
+                  borderRadius: 12, padding: '8px 16px', textAlign: 'center',
+                  backdropFilter: 'blur(4px)', flexShrink: 0,
+                }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, color: 'rgba(255,255,255,0.8)', textTransform: 'uppercase', letterSpacing: '1px' }}>TOTAL POINTS</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: '#fff', marginTop: 2 }}>{totalPoints}</div>
+                </div>
+              );
+            })()}
           </div>
         )}
 
@@ -386,17 +534,56 @@ export default function Dashboard() {
                 <div style={{ fontSize: 32, marginBottom: 8 }}>📋</div>
                 <p style={{ fontSize: 14, fontWeight: 600 }}>No forms submitted yet</p>
               </div>
-            ) : (
+            ) : (() => {
+              // Product counts
+              const productCounts = {};
+              myForms.forEach(f => {
+                if (f.status === 'Ready for Onboarding') {
+                  const prod = normalizeProduct(f.formFillingFor || f.tideProduct || f.brand || '');
+                  productCounts[prod] = (productCounts[prod] || 0) + 1;
+                }
+              });
+              const products = ['Tide', 'Tide Insurance', 'Tide MSME', 'Tide Credit Card'];
+              const filteredForms = productFilter === 'all' ? myForms : myForms.filter(f => {
+                const prod = normalizeProduct(f.formFillingFor || f.tideProduct || f.brand || '');
+                return prod === productFilter;
+              });
+              return (
+              <>
+              {/* Product filter pills */}
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+                <button onClick={() => setProductFilter('all')} style={{
+                  padding: '6px 14px', borderRadius: 20, border: `1.5px solid var(--green-dark)`,
+                  background: productFilter === 'all' ? 'var(--green-dark)' : '#fff',
+                  color: productFilter === 'all' ? '#fff' : 'var(--green-dark)',
+                  fontWeight: 700, fontSize: 12, cursor: 'pointer',
+                }}>All Products</button>
+                {products.map(p => (
+                  <button key={p} onClick={() => setProductFilter(p)} style={{
+                    padding: '6px 14px', borderRadius: 20, border: `1.5px solid ${productFilter === p ? 'var(--green-dark)' : '#dde8dd'}`,
+                    background: productFilter === p ? 'var(--green-dark)' : '#fff',
+                    color: productFilter === p ? '#fff' : '#555',
+                    fontWeight: 600, fontSize: 11, cursor: 'pointer',
+                  }}>{p}: {productCounts[p] || 0} ✓</button>
+                ))}
+              </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {myForms.map((f, i) => {
-                  const statusColor = f.status === 'Ready for Onboarding' ? { bg: '#e6f4ea', color: '#2e7d32' } :
-                    f.status === 'Not Interested' ? { bg: '#fdecea', color: '#c62828' } :
-                    { bg: '#fff3e0', color: '#e65100' };
+                {filteredForms.map((f, i) => {
+                  const product = (f.formFillingFor || f.tideProduct || f.brand || '').toLowerCase().trim();
+                  const vKey = product ? `${f.customerNumber}__${product}` : f.customerNumber;
+                  const vData = myFormsVerifyMap[vKey];
+                  const vStatus = vData ? vData.status : (f.verificationStatus || 'Not Found');
+                  const vColor = vStatus === 'Fully Verified' ? '#2e7d32' : vStatus === 'Partially Done' ? '#e65100' : vStatus === 'Not Verified' ? '#c62828' : '#757575';
+                  const vBg = vStatus === 'Fully Verified' ? '#e6f4ea' : vStatus === 'Partially Done' ? '#fff3e0' : vStatus === 'Not Verified' ? '#fdecea' : '#f5f5f5';
                   return (
-                    <div key={f._id || i} style={{
+                    <div key={f._id || i} onClick={() => { setSelectedForm(f); }} style={{
                       background: '#fff', borderRadius: 12, padding: '14px 16px',
                       border: '1.5px solid #e8f0e8', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
-                    }}>
+                      cursor: 'pointer', transition: 'all 0.2s',
+                    }}
+                      onMouseOver={e => { e.currentTarget.style.borderColor = 'var(--green-dark)'; e.currentTarget.style.background = '#f8fcf9'; }}
+                      onMouseOut={e  => { e.currentTarget.style.borderColor = '#e8f0e8'; e.currentTarget.style.background = '#fff'; }}
+                    >
                       <div style={{ flex: 1 }}>
                         <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-dark)', marginBottom: 4 }}>{f.customerName}</div>
                         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 12, color: '#888' }}>
@@ -407,27 +594,29 @@ export default function Dashboard() {
                         </div>
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-                        <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 10, fontWeight: 700, background: statusColor.bg, color: statusColor.color, whiteSpace: 'nowrap' }}>
-                          {f.status}
+                        <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 10, fontWeight: 700, background: vBg, color: vColor, whiteSpace: 'nowrap' }}>
+                          {vStatus}
                         </span>
-                        {f.verificationStatus && f.verificationStatus !== 'Not Found' && (
-                          <span style={{
-                            padding: '3px 10px', borderRadius: 20, fontSize: 10, fontWeight: 700,
-                            background: f.verificationStatus === 'Fully Verified' ? '#e6f4ea' : f.verificationStatus === 'Partially Done' ? '#fff3e0' : '#f5f5f5',
-                            color: f.verificationStatus === 'Fully Verified' ? '#2e7d32' : f.verificationStatus === 'Partially Done' ? '#e65100' : '#888',
-                          }}>
-                            {f.verificationStatus}
-                          </span>
+                        {f.customerNumber && (() => {
+                          const prod = (f.formFillingFor || f.tideProduct || f.brand || '').toLowerCase().trim();
+                          return prod === 'tide';
+                        })() && (
+                          <div onClick={e => e.stopPropagation()} style={{ marginTop: 4 }}>
+                            <TideMerchantTimeline phone={f.customerNumber} customerName={f.customerName} />
+                          </div>
                         )}
                       </div>
                     </div>
                   );
                 })}
               </div>
-            )
+              </>
+              );
+            })()
           )}
         </div>
 
+        {/* Form Detail Modal - moved outside main-content */}
         {/* KPI Cards */}
         {kpis && (
           <>
@@ -641,6 +830,27 @@ export default function Dashboard() {
                         }}
                       >
                         👥 {tl.fseCount || 0} FSEs
+                      </span>
+                      <span 
+                        className="verify-badge" 
+                        onClick={() => handleTLFormsClick(tl)}
+                        style={{ 
+                          background: '#f3e8ff', 
+                          color: '#7c3aed', 
+                          border: '1px solid #d4b5ff',
+                          cursor: 'pointer',
+                          transition: 'all 0.2s',
+                        }}
+                        onMouseOver={e => {
+                          e.currentTarget.style.background = '#e8d5ff';
+                          e.currentTarget.style.transform = 'scale(1.05)';
+                        }}
+                        onMouseOut={e => {
+                          e.currentTarget.style.background = '#f3e8ff';
+                          e.currentTarget.style.transform = 'scale(1)';
+                        }}
+                      >
+                        📋 TL Forms
                       </span>
                       {tl.status && (
                         <span className={`mr-status ${tl.status === 'active' ? 'verify-badge' : ''}`} style={{
@@ -880,81 +1090,295 @@ export default function Dashboard() {
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  {fses.map((fse, idx) => (
+                  {fses.map((fse, idx) => {
+                    const fseName = (fse.name || '').trim().toLowerCase();
+                    const stats = fseStats[fseName];
+                    const formCount = stats?.total || 0;
+                    const isSelected = selectedFSE && selectedFSE.name === fse.name;
+                    const fseFormsList = fseForms.filter(f => (f.employeeName || '').trim().toLowerCase() === fseName);
+
+                    return (
+                    <div key={fse._id}>
                     <div
-                      key={fse._id}
                       style={{
-                        background: '#fafcfa', borderRadius: 12, padding: '16px 18px',
-                        border: '1.5px solid #e8f0e8',
-                        display: 'flex', alignItems: 'center', gap: 14,
-                        transition: 'all 0.2s',
+                        background: isSelected ? '#f0faf2' : '#fafcfa', borderRadius: 12, padding: '12px 14px',
+                        border: `1.5px solid ${isSelected ? 'var(--green-dark)' : '#e8f0e8'}`,
+                        cursor: 'pointer', transition: 'all 0.2s',
                         animation: `fadeInUp 0.3s ease ${idx * 0.05}s both`,
                       }}
-                      onMouseOver={e => {
-                        e.currentTarget.style.background = '#f0faf2';
-                        e.currentTarget.style.borderColor = 'var(--green-light)';
-                      }}
-                      onMouseOut={e => {
-                        e.currentTarget.style.background = '#fafcfa';
-                        e.currentTarget.style.borderColor = '#e8f0e8';
-                      }}
+                      onClick={() => setSelectedFSE(isSelected ? null : fse)}
                     >
-                      <div style={{
-                        width: 44, height: 44, borderRadius: '50%',
-                        background: 'linear-gradient(135deg, var(--green-dark), var(--green-mid))',
-                        color: '#fff', display: 'flex', alignItems: 'center',
-                        justifyContent: 'center', fontSize: 16, fontWeight: 800,
-                        flexShrink: 0,
-                      }}>
-                        {initials(fse.name)}
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-dark)', marginBottom: 4 }}>
-                          {fse.name}
-                        </div>
-                        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12, color: 'var(--text-light)' }}>
-                          {fse.phone && <span>📱 {fse.phone}</span>}
-                          {fse.location && <span>📍 {fse.location}</span>}
-                          {fse.position && <span>💼 {fse.position}</span>}
-                        </div>
-                        {/* Form stats */}
-                        {fseStats[(fse.name||'').trim().toLowerCase()] && (() => {
-                          const s = fseStats[(fse.name||'').trim().toLowerCase()];
-                          return (
-                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
-                              {[
-                                { label: 'Total',    value: s.total,          color: '#1565c0', bg: '#e3f2fd' },
-                                { label: '✅ Verified', value: s.fullyVerified, color: '#2e7d32', bg: '#e6f4ea' },
-                                { label: '◑ Partial', value: s.partiallyDone, color: '#e65100', bg: '#fff3e0' },
-                                { label: '❌ Not Int', value: s.notInterested, color: '#c62828', bg: '#fdecea' },
-                                { label: '⬜ Unverified', value: s.notVerified, color: '#555',   bg: '#f5f5f5' },
-                              ].map(stat => (
-                                <span key={stat.label} style={{
-                                  padding: '2px 8px', borderRadius: 20, fontSize: 10, fontWeight: 700,
-                                  background: stat.bg, color: stat.color,
-                                  border: `1px solid ${stat.color}30`,
-                                }}>
-                                  {stat.label}: {stat.value}
-                                </span>
-                              ))}
-                            </div>
-                          );
-                        })()}
-                      </div>
-                      {fse.status && (
-                        <span style={{
-                          padding: '4px 12px', borderRadius: 20, fontSize: 11, fontWeight: 700,
-                          background: fse.status === 'active' ? '#e6f4ea' : '#f5f5f5',
-                          color: fse.status === 'active' ? '#2e7d32' : '#666',
-                          border: `1px solid ${fse.status === 'active' ? '#a8d5b5' : '#ddd'}`,
+                      {/* Top row: avatar + name + status */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                        <div style={{
+                          width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
+                          background: 'linear-gradient(135deg, var(--green-dark), var(--green-mid))',
+                          color: '#fff', display: 'flex', alignItems: 'center',
+                          justifyContent: 'center', fontSize: 13, fontWeight: 800,
                         }}>
-                          {fse.status}
-                        </span>
+                          {initials(fse.name)}
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-dark)' }}>{fse.name}</div>
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: 11, color: 'var(--text-light)', marginTop: 2 }}>
+                            {fse.phone && <span>📱 {fse.phone}</span>}
+                            {fse.location && <span>📍 {fse.location}</span>}
+                            {fse.position && <span>💼 {fse.position}</span>}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                          {fse.status && (
+                            <span style={{
+                              padding: '3px 10px', borderRadius: 20, fontSize: 10, fontWeight: 700,
+                              background: fse.status === 'active' ? '#e6f4ea' : '#f5f5f5',
+                              color: fse.status === 'active' ? '#2e7d32' : '#666',
+                            }}>
+                              {fse.status}
+                            </span>
+                          )}
+                          <span style={{ color: '#aaa', fontSize: 12 }}>{isSelected ? '▲' : '▼'}</span>
+                        </div>
+                      </div>
+                      {/* Stats row */}
+                      {stats && (
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          {[
+                            { label: 'Total',    value: stats.total,          color: '#1565c0', bg: '#e3f2fd' },
+                            { label: '✅ Verified', value: stats.fullyVerified, color: '#2e7d32', bg: '#e6f4ea' },
+                            { label: '◑ Partial', value: stats.partiallyDone, color: '#e65100', bg: '#fff3e0' },
+                            { label: '❌ Not Int', value: stats.notInterested, color: '#c62828', bg: '#fdecea' },
+                            { label: '⬜ Unverified', value: stats.notVerified, color: '#555',   bg: '#f5f5f5' },
+                          ].map(stat => (
+                            <span key={stat.label} style={{
+                              padding: '2px 8px', borderRadius: 20, fontSize: 10, fontWeight: 700,
+                              background: stat.bg, color: stat.color, border: `1px solid ${stat.color}30`,
+                            }}>
+                              {stat.label}: {stat.value}
+                            </span>
+                          ))}
+                        </div>
                       )}
                     </div>
-                  ))}
+
+                    {/* Expanded forms list */}
+                    {isSelected && fseFormsList.length > 0 && (
+                      <div style={{ marginTop: 8, background: '#fff', borderRadius: 10, border: '1px solid #e8f0e8', overflow: 'hidden', maxHeight: 400, overflowY: 'auto' }}>
+                        {fseFormsList.map((f, fi) => {
+                          const product = (f.formFillingFor || f.tideProduct || f.brand || '').toLowerCase().trim();
+                          const vKey = product ? `${f.customerNumber}__${product}` : f.customerNumber;
+                          const v = fseVerifyMap[vKey];
+                          const vStatus = v ? v.status : 'Not Found';
+                          const vColor = vStatus === 'Fully Verified' ? '#2e7d32' : vStatus === 'Partially Done' ? '#e65100' : vStatus === 'Critical Failure' ? '#c62828' : '#757575';
+                          const vBg = vStatus === 'Fully Verified' ? '#e6f4ea' : vStatus === 'Partially Done' ? '#fff3e0' : vStatus === 'Critical Failure' ? '#fdecea' : '#f5f5f5';
+                          const sBg = f.status === 'Ready for Onboarding' ? '#e6f4ea' : f.status === 'Not Interested' ? '#fdecea' : '#fff3e0';
+                          const sColor = f.status === 'Ready for Onboarding' ? '#2e7d32' : f.status === 'Not Interested' ? '#c62828' : '#e65100';
+                          return (
+                            <div key={f._id || fi} style={{ padding: '10px 14px', borderBottom: '1px solid #f0f0f0', background: fi % 2 === 0 ? '#fff' : '#fafafa' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+                                <div>
+                                  <span style={{ fontSize: 10, color: '#aaa', marginRight: 6 }}>#{fi + 1}</span>
+                                  <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-dark)' }}>{f.customerName || '–'}</span>
+                                </div>
+                                <span onClick={(e) => {
+                                  e.stopPropagation();
+                                  const product = (f.formFillingFor || f.tideProduct || f.brand || '').toLowerCase().trim();
+                                  const vKey2 = product ? `${f.customerNumber}__${product}` : f.customerNumber;
+                                  const vData = fseVerifyMap[vKey2];
+                                  if (vData && vData.checks) {
+                                    setVerifyDetail({ customerName: f.customerName, status: vData.status, checks: vData.checks, passed: vData.passed, total: vData.total });
+                                  }
+                                }} style={{ padding: '2px 8px', borderRadius: 12, fontSize: 9, fontWeight: 700, background: vBg, color: vColor, flexShrink: 0, cursor: vStatus !== 'Not Found' ? 'pointer' : 'default' }}>
+                                  {vStatus}
+                                </span>
+                              </div>
+                              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: 11, color: '#888' }}>
+                                <span>📱 {f.customerNumber || '–'}</span>
+                                <span>📦 {f.formFillingFor || f.tideProduct || f.brand || '–'}</span>
+                                <span style={{ padding: '1px 6px', borderRadius: 10, fontSize: 9, fontWeight: 700, background: sBg, color: sColor }}>
+                                  {f.status === 'Ready for Onboarding' ? 'Onboarding' : f.status || '–'}
+                                </span>
+                                {f.createdAt && <span>📅 {new Date(f.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {isSelected && fseFormsList.length === 0 && (
+                      <div style={{ marginTop: 8, padding: '16px', textAlign: 'center', color: '#aaa', fontSize: 13, background: '#fafafa', borderRadius: 8 }}>No forms submitted by this FSE</div>
+                    )}
+                    </div>
+                  );})}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Verification Detail Modal */}
+      {verifyDetail && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 99998, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+          onClick={() => setVerifyDetail(null)}
+        >
+          <div
+            style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: 420, maxHeight: '80vh', overflow: 'hidden', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{
+              padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              background: verifyDetail.status === 'Fully Verified' ? 'linear-gradient(135deg, #2e7d32, #1b5e20)' :
+                verifyDetail.status === 'Partially Done' ? 'linear-gradient(135deg, #f57f17, #e65100)' :
+                'linear-gradient(135deg, #757575, #424242)',
+              color: '#fff',
+            }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 800 }}>{verifyDetail.customerName}</div>
+                <div style={{ fontSize: 11, opacity: 0.9, marginTop: 2 }}>
+                  {verifyDetail.status} ({verifyDetail.passed}/{verifyDetail.total} checks passed)
+                </div>
+              </div>
+              <button onClick={() => setVerifyDetail(null)} style={{ width: 28, height: 28, borderRadius: '50%', border: 'none', background: 'rgba(255,255,255,0.2)', cursor: 'pointer', fontSize: 16, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+            </div>
+            <div style={{ padding: 16, maxHeight: 'calc(80vh - 70px)', overflowY: 'auto' }}>
+              {verifyDetail.checks.map((check, idx) => (
+                <div key={idx} style={{
+                  display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', marginBottom: 6,
+                  background: check.pass ? '#e6f4ea' : '#fdecea', borderRadius: 8,
+                  border: `1px solid ${check.pass ? '#2e7d32' : '#c62828'}20`,
+                }}>
+                  <div style={{
+                    width: 22, height: 22, borderRadius: '50%', flexShrink: 0,
+                    background: check.pass ? '#2e7d32' : '#c62828', color: '#fff',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 11, fontWeight: 800,
+                  }}>
+                    {check.pass ? '✓' : '✗'}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: check.pass ? '#2e7d32' : '#c62828' }}>{check.label}</div>
+                    {check.actual && <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>Value: {check.actual}</div>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TL Forms Modal */}
+      {tlFormsModal && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9998, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+          onClick={() => setTlFormsModal(null)}
+        >
+          <div
+            style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: 600, maxHeight: '85vh', overflow: 'hidden', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{ padding: '18px 24px', borderBottom: '1px solid #f0f5f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#7c3aed', color: '#fff' }}>
+              <div>
+                <h3 style={{ fontSize: 16, fontWeight: 800, margin: 0 }}>📋 {tlFormsModal.tl.name}'s Forms</h3>
+                <p style={{ fontSize: 12, margin: '3px 0 0', opacity: 0.8 }}>{tlFormsModal.forms.length} merchant form{tlFormsModal.forms.length !== 1 ? 's' : ''}</p>
+              </div>
+              <button onClick={() => setTlFormsModal(null)} style={{ width: 32, height: 32, borderRadius: '50%', border: 'none', background: 'rgba(255,255,255,0.2)', cursor: 'pointer', fontSize: 18, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+            </div>
+            <div style={{ padding: 16, maxHeight: 'calc(85vh - 80px)', overflowY: 'auto' }}>
+              {tlFormsModal.loading ? (
+                <div style={{ textAlign: 'center', padding: '40px 20px', color: '#888' }}>Loading forms…</div>
+              ) : tlFormsModal.forms.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '40px 20px', color: '#aaa' }}>
+                  <div style={{ fontSize: 32, marginBottom: 8 }}>📋</div>
+                  <p style={{ fontSize: 14, fontWeight: 600 }}>No forms submitted by this TL</p>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {tlFormsModal.forms.map((f, fi) => {
+                    const product = (f.formFillingFor || f.tideProduct || f.brand || '').toLowerCase().trim();
+                    const vKey = product ? `${f.customerNumber}__${product}` : f.customerNumber;
+                    const v = tlFormsModal.verifyMap[vKey];
+                    const vStatus = v ? v.status : 'Not Found';
+                    const vColor = vStatus === 'Fully Verified' ? '#2e7d32' : vStatus === 'Partially Done' ? '#e65100' : vStatus === 'Critical Failure' ? '#c62828' : '#757575';
+                    const vBg = vStatus === 'Fully Verified' ? '#e6f4ea' : vStatus === 'Partially Done' ? '#fff3e0' : vStatus === 'Critical Failure' ? '#fdecea' : '#f5f5f5';
+                    const sBg = f.status === 'Ready for Onboarding' ? '#e6f4ea' : f.status === 'Not Interested' ? '#fdecea' : '#fff3e0';
+                    const sColor = f.status === 'Ready for Onboarding' ? '#2e7d32' : f.status === 'Not Interested' ? '#c62828' : '#e65100';
+                    return (
+                      <div key={f._id || fi} style={{ padding: '10px 14px', borderBottom: '1px solid #f0f0f0', background: fi % 2 === 0 ? '#fff' : '#fafafa', borderRadius: 8 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+                          <div>
+                            <span style={{ fontSize: 10, color: '#aaa', marginRight: 6 }}>#{fi + 1}</span>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-dark)' }}>{f.customerName || '–'}</span>
+                          </div>
+                          <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 9, fontWeight: 700, background: vBg, color: vColor, flexShrink: 0 }}>
+                            {vStatus}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: 11, color: '#888' }}>
+                          <span>📱 {f.customerNumber || '–'}</span>
+                          <span>📦 {f.formFillingFor || f.tideProduct || f.brand || '–'}</span>
+                          <span style={{ padding: '1px 6px', borderRadius: 10, fontSize: 9, fontWeight: 700, background: sBg, color: sColor }}>
+                            {f.status === 'Ready for Onboarding' ? 'Onboarding' : f.status || '–'}
+                          </span>
+                          {f.createdAt && <span>📅 {new Date(f.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Form Detail Modal — at root level to avoid overflow:hidden clipping */}
+      {selectedForm && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+          onClick={() => setSelectedForm(null)}
+        >
+          <div
+            style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: 520, maxHeight: '85vh', overflow: 'hidden', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{ padding: '18px 24px', borderBottom: '1px solid #f0f5f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--green-dark)', color: '#fff' }}>
+              <div>
+                <h3 style={{ fontSize: 16, fontWeight: 800, margin: 0 }}>{selectedForm.customerName}</h3>
+                <p style={{ fontSize: 12, margin: '3px 0 0', opacity: 0.8 }}>📱 {selectedForm.customerNumber} · 📍 {selectedForm.location}</p>
+              </div>
+              <button onClick={() => setSelectedForm(null)} style={{ width: 32, height: 32, borderRadius: '50%', border: 'none', background: 'rgba(255,255,255,0.2)', cursor: 'pointer', fontSize: 18, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+            </div>
+            <div style={{ padding: 20, overflowY: 'auto', maxHeight: 'calc(85vh - 80px)' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                {[
+                  ['Status', selectedForm.status],
+                  ['Brand', selectedForm.brand || '–'],
+                  ['Product', selectedForm.formFillingFor || selectedForm.tideProduct || '–'],
+                  ['Date', selectedForm.createdAt ? new Date(selectedForm.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : '–'],
+                  ['Verification', (() => {
+                    const p = (selectedForm.formFillingFor || selectedForm.tideProduct || selectedForm.brand || '').toLowerCase().trim();
+                    const k = p ? `${selectedForm.customerNumber}__${p}` : selectedForm.customerNumber;
+                    return myFormsVerifyMap[k]?.status || selectedForm.verificationStatus || 'Not Found';
+                  })()],
+                  ...(selectedForm.tide_qrPosted ? [['QR Posted', selectedForm.tide_qrPosted]] : []),
+                  ...(selectedForm.tide_upiTxnDone ? [['UPI Txn Done', selectedForm.tide_upiTxnDone]] : []),
+                  ...(selectedForm.tideBt_txnDone ? [['Rs 10 Txn Done', selectedForm.tideBt_txnDone]] : []),
+                  ...(selectedForm.ins_vehicleNumber ? [['Vehicle No', selectedForm.ins_vehicleNumber]] : []),
+                  ...(selectedForm.ins_vehicleType ? [['Vehicle Type', selectedForm.ins_vehicleType]] : []),
+                  ...(selectedForm.ins_insuranceType ? [['Insurance Type', selectedForm.ins_insuranceType]] : []),
+                  ...(selectedForm.pine_cardTxn ? [['Card Txn Rs 100', selectedForm.pine_cardTxn]] : []),
+                  ...(selectedForm.pine_wifiConnected ? [['Wi-Fi Connected', selectedForm.pine_wifiConnected]] : []),
+                  ...(selectedForm.cc_cardName ? [['Credit Card Name', selectedForm.cc_cardName]] : []),
+                  ...(selectedForm.tideIns_type ? [['Insurance Type', selectedForm.tideIns_type]] : []),
+                  ...(selectedForm.reason ? [['Reason', selectedForm.reason]] : []),
+                ].map(([label, value], idx) => (
+                  <div key={idx} style={{ gridColumn: label === 'Reason' ? '1 / -1' : undefined }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: '#888', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>{label}</div>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-dark)', wordBreak: 'break-word' }}>{value}</div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
