@@ -1198,6 +1198,11 @@ export default function Dashboard() {
                                   {f.status === 'Ready for Onboarding' ? 'Onboarding' : f.status || '–'}
                                 </span>
                                 {f.createdAt && <span>📅 {new Date(f.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>}
+                                {f.customerNumber && (f.formFillingFor || f.tideProduct || f.brand || '').toLowerCase().trim() === 'tide' && (
+                                  <div onClick={e => e.stopPropagation()} style={{ display: 'inline-flex' }}>
+                                    <TideMerchantTimeline phone={f.customerNumber} customerName={f.customerName} />
+                                  </div>
+                                )}
                               </div>
                             </div>
                           );
@@ -1301,26 +1306,41 @@ export default function Dashboard() {
                     const vStatus = v ? v.status : 'Not Found';
                     const vColor = vStatus === 'Fully Verified' ? '#2e7d32' : vStatus === 'Partially Done' ? '#e65100' : vStatus === 'Critical Failure' ? '#c62828' : '#757575';
                     const vBg = vStatus === 'Fully Verified' ? '#e6f4ea' : vStatus === 'Partially Done' ? '#fff3e0' : vStatus === 'Critical Failure' ? '#fdecea' : '#f5f5f5';
-                    const sBg = f.status === 'Ready for Onboarding' ? '#e6f4ea' : f.status === 'Not Interested' ? '#fdecea' : '#fff3e0';
-                    const sColor = f.status === 'Ready for Onboarding' ? '#2e7d32' : f.status === 'Not Interested' ? '#c62828' : '#e65100';
                     return (
-                      <div key={f._id || fi} style={{ padding: '10px 14px', borderBottom: '1px solid #f0f0f0', background: fi % 2 === 0 ? '#fff' : '#fafafa', borderRadius: 8 }}>
+                      <div key={f._id || fi}
+                        onClick={() => setSelectedForm(f)}
+                        style={{ padding: '10px 14px', borderBottom: '1px solid #f0f0f0', background: fi % 2 === 0 ? '#fff' : '#fafafa', borderRadius: 8, cursor: 'pointer', transition: 'all 0.2s' }}
+                        onMouseOver={e => { e.currentTarget.style.background = '#f0f5ff'; e.currentTarget.style.borderColor = '#7c3aed'; }}
+                        onMouseOut={e => { e.currentTarget.style.background = fi % 2 === 0 ? '#fff' : '#fafafa'; e.currentTarget.style.borderColor = '#f0f0f0'; }}
+                      >
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
                           <div>
                             <span style={{ fontSize: 10, color: '#aaa', marginRight: 6 }}>#{fi + 1}</span>
                             <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-dark)' }}>{f.customerName || '–'}</span>
                           </div>
-                          <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 9, fontWeight: 700, background: vBg, color: vColor, flexShrink: 0 }}>
+                          <span
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (v && v.checks) {
+                                setVerifyDetail({ customerName: f.customerName, status: v.status, checks: v.checks, passed: v.passed, total: v.total });
+                              }
+                            }}
+                            style={{ padding: '2px 8px', borderRadius: 12, fontSize: 9, fontWeight: 700, background: vBg, color: vColor, flexShrink: 0, cursor: (v && v.checks) ? 'pointer' : 'default', transition: 'transform 0.15s' }}
+                            onMouseOver={e => { if (v && v.checks) e.currentTarget.style.transform = 'scale(1.1)'; }}
+                            onMouseOut={e => { e.currentTarget.style.transform = 'scale(1)'; }}
+                          >
                             {vStatus}
                           </span>
                         </div>
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: 11, color: '#888' }}>
                           <span>📱 {f.customerNumber || '–'}</span>
                           <span>📦 {f.formFillingFor || f.tideProduct || f.brand || '–'}</span>
-                          <span style={{ padding: '1px 6px', borderRadius: 10, fontSize: 9, fontWeight: 700, background: sBg, color: sColor }}>
-                            {f.status === 'Ready for Onboarding' ? 'Onboarding' : f.status || '–'}
-                          </span>
                           {f.createdAt && <span>📅 {new Date(f.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>}
+                          {f.customerNumber && (f.formFillingFor || f.tideProduct || f.brand || '').toLowerCase().trim() === 'tide' && (
+                            <div onClick={e => e.stopPropagation()} style={{ display: 'inline-flex' }}>
+                              <TideMerchantTimeline phone={f.customerNumber} customerName={f.customerName} />
+                            </div>
+                          )}
                         </div>
                       </div>
                     );
@@ -1333,7 +1353,15 @@ export default function Dashboard() {
       )}
 
       {/* Form Detail Modal — at root level to avoid overflow:hidden clipping */}
-      {selectedForm && (
+      {selectedForm && (() => {
+        const sfProduct = (selectedForm.formFillingFor || selectedForm.tideProduct || selectedForm.brand || '').toLowerCase().trim();
+        const sfVKey = sfProduct ? `${selectedForm.customerNumber}__${sfProduct}` : selectedForm.customerNumber;
+        // Check both myFormsVerifyMap and tlFormsModal verifyMap for verification data
+        const sfVerify = myFormsVerifyMap[sfVKey] || (tlFormsModal && tlFormsModal.verifyMap ? tlFormsModal.verifyMap[sfVKey] : null) || (fseVerifyMap ? fseVerifyMap[sfVKey] : null);
+        const sfVStatus = sfVerify ? sfVerify.status : (selectedForm.verificationStatus || 'Not Found');
+        const sfVColor = sfVStatus === 'Fully Verified' ? '#2e7d32' : sfVStatus === 'Partially Done' ? '#e65100' : sfVStatus === 'Critical Failure' ? '#c62828' : '#757575';
+        const sfVBg = sfVStatus === 'Fully Verified' ? '#e6f4ea' : sfVStatus === 'Partially Done' ? '#fff3e0' : sfVStatus === 'Critical Failure' ? '#fdecea' : '#f5f5f5';
+        return (
         <div
           style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
           onClick={() => setSelectedForm(null)}
@@ -1345,22 +1373,49 @@ export default function Dashboard() {
             <div style={{ padding: '18px 24px', borderBottom: '1px solid #f0f5f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--green-dark)', color: '#fff' }}>
               <div>
                 <h3 style={{ fontSize: 16, fontWeight: 800, margin: 0 }}>{selectedForm.customerName}</h3>
-                <p style={{ fontSize: 12, margin: '3px 0 0', opacity: 0.8 }}>📱 {selectedForm.customerNumber} · 📍 {selectedForm.location}</p>
+                <p style={{ fontSize: 12, margin: '3px 0 0', opacity: 0.8 }}>📱 {selectedForm.customerNumber} · 📍 {selectedForm.location || '–'}</p>
               </div>
               <button onClick={() => setSelectedForm(null)} style={{ width: 32, height: 32, borderRadius: '50%', border: 'none', background: 'rgba(255,255,255,0.2)', cursor: 'pointer', fontSize: 18, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
             </div>
             <div style={{ padding: 20, overflowY: 'auto', maxHeight: 'calc(85vh - 80px)' }}>
+              {/* Verification Status Banner */}
+              <div
+                onClick={() => {
+                  if (sfVerify && sfVerify.checks) {
+                    setVerifyDetail({ customerName: selectedForm.customerName, status: sfVerify.status, checks: sfVerify.checks, passed: sfVerify.passed, total: sfVerify.total });
+                  }
+                }}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '12px 16px', borderRadius: 10, marginBottom: 16,
+                  background: sfVBg, border: `1.5px solid ${sfVColor}30`,
+                  cursor: (sfVerify && sfVerify.checks) ? 'pointer' : 'default',
+                  transition: 'transform 0.15s',
+                }}
+                onMouseOver={e => { if (sfVerify && sfVerify.checks) e.currentTarget.style.transform = 'scale(1.02)'; }}
+                onMouseOut={e => { e.currentTarget.style.transform = 'scale(1)'; }}
+              >
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#888', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Verification Status</div>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: sfVColor, marginTop: 2 }}>{sfVStatus}</div>
+                  {sfVerify && sfVerify.passed !== undefined && (
+                    <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>{sfVerify.passed}/{sfVerify.total} checks passed</div>
+                  )}
+                </div>
+                {(sfVerify && sfVerify.checks) && (
+                  <div style={{ fontSize: 11, color: sfVColor, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    View Details <span style={{ fontSize: 14 }}>›</span>
+                  </div>
+                )}
+              </div>
+
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
                 {[
                   ['Status', selectedForm.status],
                   ['Brand', selectedForm.brand || '–'],
                   ['Product', selectedForm.formFillingFor || selectedForm.tideProduct || '–'],
                   ['Date', selectedForm.createdAt ? new Date(selectedForm.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : '–'],
-                  ['Verification', (() => {
-                    const p = (selectedForm.formFillingFor || selectedForm.tideProduct || selectedForm.brand || '').toLowerCase().trim();
-                    const k = p ? `${selectedForm.customerNumber}__${p}` : selectedForm.customerNumber;
-                    return myFormsVerifyMap[k]?.status || selectedForm.verificationStatus || 'Not Found';
-                  })()],
+                  ...(selectedForm.employeeName ? [['Submitted By', selectedForm.employeeName]] : []),
                   ...(selectedForm.tide_qrPosted ? [['QR Posted', selectedForm.tide_qrPosted]] : []),
                   ...(selectedForm.tide_upiTxnDone ? [['UPI Txn Done', selectedForm.tide_upiTxnDone]] : []),
                   ...(selectedForm.tideBt_txnDone ? [['Rs 10 Txn Done', selectedForm.tideBt_txnDone]] : []),
@@ -1382,7 +1437,8 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
