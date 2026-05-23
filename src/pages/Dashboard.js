@@ -243,7 +243,7 @@ export default function Dashboard() {
     try {
       const [fseRes, formsRes] = await Promise.all([
         fetch(`${API_BASE}/api/manager/tl/${tl._id}/fses`, { headers: { Authorization: `Bearer ${token}` } }),
-        fetch(`${API_BASE}/api/manager/tl/${tl._id}/fse-forms`, { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(`${API_BASE}/api/manager/tl/${tl._id}/fse-forms?year=${selYear}&month=${selMonth}`, { headers: { Authorization: `Bearer ${token}` } }),
       ]);
       const fseData = await fseRes.json();
       const formsData = await formsRes.json();
@@ -318,7 +318,7 @@ export default function Dashboard() {
     setTlFormsModal({ tl, forms: [], verifyMap: {}, loading: true });
     const token = localStorage.getItem('token');
     try {
-      const res = await fetch(`${API_BASE}/api/manager/tl/${tl._id}/tl-forms`, {
+      const res = await fetch(`${API_BASE}/api/manager/tl/${tl._id}/tl-forms?year=${selYear}&month=${selMonth}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const forms = await res.json();
