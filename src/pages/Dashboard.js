@@ -401,8 +401,8 @@ export default function Dashboard() {
               style={{ position: 'relative' }}
             >
               <div className="nav-avatar">
-                {manager.photoUrl
-                  ? <img src={manager.photoUrl} alt={manager.name} />
+                {manager.image
+                  ? <img src={manager.image} alt={manager.name} />
                   : initials(manager.name)
                 }
               </div>
@@ -448,8 +448,8 @@ export default function Dashboard() {
         {manager && (
           <div className="welcome-card" style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 10 }}>
             <div className="welcome-avatar" style={{ flexShrink: 0 }}>
-              {manager.photoUrl
-                ? <img src={manager.photoUrl} alt={manager.name} />
+              {manager.image
+                ? <img src={manager.image} alt={manager.name} />
                 : initials(manager.name)
               }
             </div>
