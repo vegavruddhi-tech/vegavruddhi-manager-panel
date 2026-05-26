@@ -538,18 +538,26 @@ export default function Dashboard() {
                 <p style={{ fontSize: 14, fontWeight: 600 }}>No forms submitted yet</p>
               </div>
             ) : (() => {
-              // Product counts
+              // Product counts - only Fully Verified forms
               const productCounts = {};
               myForms.forEach(f => {
                 if (f.status === 'Ready for Onboarding') {
                   const prod = normalizeProduct(f.formFillingFor || f.tideProduct || f.brand || '');
-                  productCounts[prod] = (productCounts[prod] || 0) + 1;
+                  const productLower = (f.formFillingFor || f.tideProduct || f.brand || '').toLowerCase().trim();
+                  const vKey = productLower ? `${f.customerNumber}__${productLower}` : f.customerNumber;
+                  if (myFormsVerifyMap[vKey]?.status === 'Fully Verified') {
+                    productCounts[prod] = (productCounts[prod] || 0) + 1;
+                  }
                 }
               });
               const products = ['Tide', 'Tide Insurance', 'Tide MSME', 'Tide Credit Card'];
               const filteredForms = productFilter === 'all' ? myForms : myForms.filter(f => {
                 const prod = normalizeProduct(f.formFillingFor || f.tideProduct || f.brand || '');
-                return prod === productFilter;
+                if (prod !== productFilter) return false;
+                // Only show Fully Verified forms when product is selected
+                const productLower = (f.formFillingFor || f.tideProduct || f.brand || '').toLowerCase().trim();
+                const vKey = productLower ? `${f.customerNumber}__${productLower}` : f.customerNumber;
+                return myFormsVerifyMap[vKey]?.status === 'Fully Verified';
               });
               return (
               <>

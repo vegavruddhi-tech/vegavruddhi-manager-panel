@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { API_BASE } from '../api';
 import { useNavigate, Link } from 'react-router-dom';
 
-const BRANDS       = ['Tide', 'Tide BT', 'Insurance 2W/4W', 'PineLab'];
+const BRANDS       = ['Tide', 'Insurance 2W/4W', 'PineLab'];
 const TIDE_PRODUCTS = ['Tide', 'Tide Insurance', 'Tide MSME', 'Tide Credit Card'];
 
 function RadioGroup({ name, options, value, onChange }) {
