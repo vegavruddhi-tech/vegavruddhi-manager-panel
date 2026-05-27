@@ -36,23 +36,62 @@ export default function Dashboard() {
   const [fseForms, setFseForms] = useState([]);
   const [fseVerifyMap, setFseVerifyMap] = useState({});
   const [selectedFSE, setSelectedFSE] = useState(null);
-  const [verifyDetail, setVerifyDetail] = useState(null); // { customerName, status, checks }
+  const [verifyDetail, setVerifyDetail] = useState(null);
   const [myForms, setMyForms] = useState([]);
   const [myFormsLoading, setMyFormsLoading] = useState(false);
   const [showMyForms, setShowMyForms] = useState(false);
   const [selectedForm, setSelectedForm] = useState(null);
   const [myFormsVerifyMap, setMyFormsVerifyMap] = useState({});
   const [tlFormsModal, setTlFormsModal] = useState(null);
-  const [productFilter, setProductFilter] = useState('all'); // { tl, forms, verifyMap, loading }
+  const [productFilter, setProductFilter] = useState('all');
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [kpis, setKpis] = useState(null);
-  const [kpiModal, setKpiModal]       = useState(null);  // { title, type, data, loading }
+  const [kpiModal, setKpiModal]       = useState(null);
   const [kpiSearch, setKpiSearch]     = useState('');
   const [dateFilter, setDateFilter]   = useState('all');
   const [fromDate,   setFromDate]     = useState('');
   const [toDate,     setToDate]       = useState('');
   const [selYear,    setSelYear]      = useState(new Date().getFullYear().toString());
   const [selMonth,   setSelMonth]     = useState(new Date().getMonth().toString());
+  
+  // PWA Install state
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [showInstallButton, setShowInstallButton] = useState(false);
+
+  // PWA Install prompt handler
+  useEffect(() => {
+    const handler = (e) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setShowInstallButton(true);
+    };
+
+    window.addEventListener('beforeinstallprompt', handler);
+
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+      setShowInstallButton(false);
+    }
+
+    window.addEventListener('appinstalled', () => {
+      setShowInstallButton(false);
+      setDeferredPrompt(null);
+    });
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handler);
+    };
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      console.log('User accepted the install prompt');
+    }
+    setDeferredPrompt(null);
+    setShowInstallButton(false);
+  };
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -394,6 +433,39 @@ export default function Dashboard() {
           <img src="/logo-full.png" alt="Vegavruddhi" />
         </div>
         <div className="nav-right">
+          {/* Install App Button (PWA) */}
+          {showInstallButton && (
+            <div
+              onClick={handleInstallClick}
+              style={{
+                marginRight: 12,
+                cursor: 'pointer',
+                padding: '8px 16px',
+                borderRadius: 20,
+                background: 'linear-gradient(135deg, #1a4731 0%, #40916c 100%)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                transition: 'all 0.2s',
+                border: '2px solid #40916c',
+                boxShadow: '0 2px 8px rgba(26, 71, 49, 0.3)',
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.transform = 'translateY(-2px)';
+                e.currentTarget.style.boxShadow = '0 4px 12px rgba(26, 71, 49, 0.4)';
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.transform = 'translateY(0)';
+                e.currentTarget.style.boxShadow = '0 2px 8px rgba(26, 71, 49, 0.3)';
+              }}
+            >
+              <span style={{ fontSize: 16 }}>📱</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#fff' }}>
+                Install App
+              </span>
+            </div>
+          )}
+          
           {manager && (
             <div 
               className="nav-profile"
