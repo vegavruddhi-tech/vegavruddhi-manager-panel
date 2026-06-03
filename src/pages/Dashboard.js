@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { API_BASE } from '../api';
 import TideMerchantTimeline from '../components/TideMerchantTimeline';
+import MeetingsModal from '../components/MeetingsModal';
 
 const POINTS_MAP = {
   'Tide': 2,
@@ -53,6 +54,9 @@ export default function Dashboard() {
   const [toDate,     setToDate]       = useState('');
   const [selYear,    setSelYear]      = useState(new Date().getFullYear().toString());
   const [selMonth,   setSelMonth]     = useState(new Date().getMonth().toString());
+  
+  const [meetingsOpen, setMeetingsOpen] = useState(false);
+  const [meetingCount, setMeetingCount] = useState(0);
   
   // PWA Install state
   const [deferredPrompt, setDeferredPrompt] = useState(null);
@@ -218,7 +222,27 @@ export default function Dashboard() {
       })
       .catch(err => console.error('Failed to load my forms:', err))
       .finally(() => setMyFormsLoading(false));
-  }, [navigate]);
+
+    // Initial meetings count fetch
+    const refreshMeetings = () => {
+      const email = manager?.email;
+      if (!token || !email) return;
+      fetch(`${API_BASE}/api/meetings/my-meetings?email=${encodeURIComponent(email)}`, {
+        headers: { Authorization: 'Bearer ' + token }
+      })
+        .then(r => r.json())
+        .then(data => {
+          if (data.success && data.unreadCount !== undefined) {
+            setMeetingCount(data.unreadCount);
+          }
+        })
+        .catch(() => {});
+    };
+    
+    refreshMeetings();
+    const mInterval = setInterval(refreshMeetings, 15000);
+    return () => clearInterval(mInterval);
+  }, [navigate, manager?.email]);
 
   const handleLogout = () => {
     // Clear all manager caches
@@ -466,6 +490,33 @@ export default function Dashboard() {
             </div>
           )}
           
+          {/* 🎥 Meetings Bell */}
+          <div
+            onClick={() => setMeetingsOpen(true)}
+            style={{
+              position: 'relative', marginRight: 12, cursor: 'pointer',
+              width: 40, height: 40, borderRadius: '50%',
+              background: meetingCount > 0 ? '#2e7d32' : 'rgba(46,125,50,0.08)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              border: meetingCount > 0 ? '2px solid #66bb6a' : '2px solid transparent',
+              transition: 'all 0.2s',
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = '#2e7d32'}
+            onMouseLeave={e => e.currentTarget.style.background = meetingCount > 0 ? '#2e7d32' : 'rgba(46,125,50,0.08)'}
+          >
+            <span style={{ fontSize: 18 }}>🎥</span>
+            {meetingCount > 0 && (
+              <span style={{
+                position: 'absolute', top: -4, right: -4,
+                background: '#ff9800', color: '#fff', borderRadius: '50%',
+                width: 18, height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 10, fontWeight: 800, border: '2px solid #fff',
+              }}>
+                {meetingCount > 9 ? '9+' : meetingCount}
+              </span>
+            )}
+          </div>
+
           {manager && (
             <div 
               className="nav-profile"
