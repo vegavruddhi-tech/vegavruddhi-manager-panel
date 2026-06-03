@@ -1573,6 +1573,16 @@ export default function Dashboard() {
         </div>
         );
       })()}
+
+      {/* Meetings Modal */}
+      {meetingsOpen && (
+        <MeetingsModal
+          isOpen={meetingsOpen}
+          onClose={() => setMeetingsOpen(false)}
+          userEmail={manager?.email}
+          token={localStorage.getItem('token')}
+        />
+      )}
     </div>
   );
 }
