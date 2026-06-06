@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { API_BASE } from '../api';
 import { useNavigate, Link } from 'react-router-dom';
 
+/*
 const BRANDS       = ['Tide', 'Insurance 2W/4W', 'PineLab'];
 const TIDE_PRODUCTS = ['Tide', 'Tide Insurance', 'Tide MSME', 'Tide Credit Card'];
+*/
 
 function RadioGroup({ name, options, value, onChange }) {
   return (
@@ -93,6 +95,22 @@ export default function MerchantForm() {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [manager, setManager] = useState(null);
 
+  // Dynamic Form State
+  const [formConfig, setFormConfig] = useState(null);
+  const [dynamicData, setDynamicData] = useState({});
+
+  // Fetch Form Config
+  useEffect(() => {
+    fetch(`${API_BASE}/api/form-config`)
+      .then(r => r.json())
+      .then(setFormConfig)
+      .catch(console.error);
+  }, []);
+
+  const handleDynamicChange = (key, value) => {
+    setDynamicData(prev => ({ ...prev, [key]: value }));
+  };
+
   useEffect(() => {
     if (!token) { navigate('/'); return; }
     const cached = localStorage.getItem('manager');
@@ -123,16 +141,8 @@ export default function MerchantForm() {
       ...(isOnboarding && brand ? { brand } : {}),
       ...(isOnboarding && brand ? { formFillingFor: brand === 'Tide' && tideProduct ? tideProduct : brand } : {}),
       ...(isOnboarding && tideProduct ? { tideProduct } : {}),
-      ...(isOnboarding && tideBtTxn ? { tideBt_txnDone: tideBtTxn } : {}),
-      ...(isOnboarding && tideQR ? { tide_qrPosted: tideQR } : {}),
-      ...(isOnboarding && tideUPI ? { tide_upiTxnDone: tideUPI } : {}),
-      ...(isOnboarding && insVehicleNo ? { ins_vehicleNumber: insVehicleNo } : {}),
-      ...(isOnboarding && insVehicle ? { ins_vehicleType: insVehicle } : {}),
-      ...(isOnboarding && insType ? { ins_insuranceType: insType } : {}),
-      ...(isOnboarding && pineCard ? { pine_cardTxn: pineCard } : {}),
-      ...(isOnboarding && pineWifi ? { pine_wifiConnected: pineWifi } : {}),
-      ...(isOnboarding && ccName ? { cc_cardName: ccName } : {}),
-      ...(isOnboarding && tideInsType ? { tideIns_type: tideInsType } : {}),
+      // dynamic fields
+      ...(isOnboarding ? dynamicData : {}),
       ...(!isOnboarding && reason ? { reason } : {}),
     };
 
@@ -244,8 +254,67 @@ export default function MerchantForm() {
             </FormCard>
           )}
 
-          {isOnboarding && (
+          {isOnboarding && formConfig && (
             <FormCard icon="🏷️" title="Brand Name" sub="Select the brand">
+              <FormGroup label="Brand" required>
+                <RadioGroup 
+                  name="brand" 
+                  options={formConfig.brands.map(b => b.name)} 
+                  value={brand} 
+                  onChange={v => { setBrand(v); setTideProduct(''); setDynamicData({}); }} 
+                />
+              </FormGroup>
+
+              {/* Dynamic sub-products and fields */}
+              {(() => {
+                const selectedBrand = formConfig.brands.find(b => b.name === brand);
+                if (!selectedBrand) return null;
+
+                return (
+                  <>
+                    {selectedBrand.hasSubProducts && (
+                      <FormGroup label="Product" required>
+                        <RadioGroup 
+                          name="tideProduct" 
+                          options={selectedBrand.products.map(p => p.name)} 
+                          value={tideProduct} 
+                          onChange={(val) => { setTideProduct(val); setDynamicData({}); }} 
+                        />
+                      </FormGroup>
+                    )}
+
+                    {/* Render Fields */}
+                    {(() => {
+                      const fields = selectedBrand.hasSubProducts 
+                        ? selectedBrand.products.find(p => p.name === tideProduct)?.fields || []
+                        : selectedBrand.fields || [];
+
+                      return fields.map((f, i) => (
+                        <FormGroup key={i} label={f.label}>
+                          {f.type === 'radio' ? (
+                            <RadioGroup 
+                              name={f.name} 
+                              options={f.options || ['Yes', 'No']} 
+                              value={dynamicData[f.name] || ''} 
+                              onChange={(val) => handleDynamicChange(f.name, val)} 
+                            />
+                          ) : (
+                            <input 
+                              style={inputStyle}
+                              type="text" 
+                              value={dynamicData[f.name] || ''} 
+                              onChange={e => handleDynamicChange(f.name, e.target.value)} 
+                              placeholder={`Enter ${f.label.toLowerCase()}`} 
+                            />
+                          )}
+                        </FormGroup>
+                      ));
+                    })()}
+                  </>
+                );
+              })()}
+
+              {/* --- Old Hardcoded form (commented out for testing) ---
               <FormGroup label="Brand" required>
                 <RadioGroup name="brand" options={BRANDS} value={brand} onChange={v => { setBrand(v); setTideProduct(''); }} />
               </FormGroup>
@@ -299,6 +368,7 @@ export default function MerchantForm() {
                   <RadioGroup name="pine_wifi" options={['Yes', 'No']} value={pineWifi} onChange={setPineWifi} />
                 </FormGroup>
               </>}
+              --- */}
             </FormCard>
           )}
 

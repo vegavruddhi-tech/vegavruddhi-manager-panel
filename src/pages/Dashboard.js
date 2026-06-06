@@ -4,14 +4,6 @@ import { API_BASE } from '../api';
 import TideMerchantTimeline from '../components/TideMerchantTimeline';
 import MeetingsModal from '../components/MeetingsModal';
 
-const POINTS_MAP = {
-  'Tide': 2,
-  'Tide MSME': 0.3,
-  'Tide Insurance': 1,
-  'Tide Credit Card': 1,
-  'Tide BT': 1,
-};
-
 const normalizeProduct = (product) => {
   const p = (product || '').toLowerCase().trim();
   if (p === 'tide insurance' || p === 'insurance') return 'Tide Insurance';
@@ -20,6 +12,14 @@ const normalizeProduct = (product) => {
   if (p === 'tide credit card' || p === 'credit card') return 'Tide Credit Card';
   if (p === 'tide bt' || p === 'bt') return 'Tide BT';
   return product;
+};
+
+const getVerifyKey = (f) => {
+  const phone = f.customerNumber || f.phone || '';
+  const rawProduct = f.formFillingFor || f.tideProduct || f.brand || f.product || '';
+  const product = rawProduct.toLowerCase().trim();
+  const month = f.createdAt ? new Date(f.createdAt).toLocaleString('en-US', { month: 'long', year: 'numeric' }) : '';
+  return product ? `${phone}__${product}__${month}` : `${phone}__${month}`;
 };
 
 export default function Dashboard() {
@@ -167,14 +167,13 @@ export default function Dashboard() {
                     phones: allForms.map(f => f.phone || ''),
                     names: allForms.map(f => f.customer || ''),
                     products: allForms.map(f => (f.product || '').toLowerCase().trim()),
-                    months: allForms.map(f => f._date ? new Date(f._date).toLocaleString('en-US', { month: 'long', year: 'numeric' }) : ''),
+                    months: allForms.map(f => f.createdAt ? new Date(f.createdAt).toLocaleString('en-US', { month: 'long', year: 'numeric' }) : ''),
                   }),
                 });
                 const vm = await vRes.json();
                 let fv = 0, pd = 0;
                 allForms.forEach(f => {
-                  const product = (f.product || '').toLowerCase().trim();
-                  const vKey = product ? `${f.phone}__${product}` : f.phone;
+                  const vKey = getVerifyKey(f);
                   const status = vm[vKey]?.status;
                   if (status === 'Fully Verified') fv++;
                   else if (status === 'Partially Done') pd++;
@@ -338,8 +337,7 @@ export default function Dashboard() {
           const name = (f.employeeName || '').trim().toLowerCase();
           if (!statsMap[name]) statsMap[name] = { total: 0, fullyVerified: 0, partiallyDone: 0, notInterested: 0, notVerified: 0 };
           statsMap[name].total++;
-          const product = (f.formFillingFor || f.tideProduct || f.brand || '').toLowerCase().trim();
-          const vKey = product ? `${f.customerNumber}__${product}` : f.customerNumber;
+          const vKey = getVerifyKey(f);
           const verification = verifyMap[vKey];
           const st = (f.status || '').trim();
           if (verification) {
@@ -588,12 +586,10 @@ export default function Dashboard() {
                   // Filter by selected month/year
                   if (selYear && new Date(f.createdAt).getFullYear() !== parseInt(selYear)) return;
                   if (selMonth !== '' && new Date(f.createdAt).getMonth() !== parseInt(selMonth)) return;
-                  const product = f.formFillingFor || f.tideProduct || f.brand || '';
-                  const productLower = product.toLowerCase().trim();
-                  const vKey = productLower ? `${f.customerNumber}__${productLower}` : f.customerNumber;
+                  const vKey = getVerifyKey(f);
                   const vStatus = myFormsVerifyMap[vKey]?.status;
                   if (vStatus === 'Fully Verified') {
-                    totalPoints += POINTS_MAP[normalizeProduct(product)] || 0;
+                    totalPoints += myFormsVerifyMap[vKey]?.points || 0;
                   }
                 }
               });
@@ -666,8 +662,7 @@ export default function Dashboard() {
               myForms.forEach(f => {
                 if (f.status === 'Ready for Onboarding') {
                   const prod = normalizeProduct(f.formFillingFor || f.tideProduct || f.brand || '');
-                  const productLower = (f.formFillingFor || f.tideProduct || f.brand || '').toLowerCase().trim();
-                  const vKey = productLower ? `${f.customerNumber}__${productLower}` : f.customerNumber;
+                  const vKey = getVerifyKey(f);
                   if (myFormsVerifyMap[vKey]?.status === 'Fully Verified') {
                     productCounts[prod] = (productCounts[prod] || 0) + 1;
                   }
@@ -678,8 +673,7 @@ export default function Dashboard() {
                 const prod = normalizeProduct(f.formFillingFor || f.tideProduct || f.brand || '');
                 if (prod !== productFilter) return false;
                 // Only show Fully Verified forms when product is selected
-                const productLower = (f.formFillingFor || f.tideProduct || f.brand || '').toLowerCase().trim();
-                const vKey = productLower ? `${f.customerNumber}__${productLower}` : f.customerNumber;
+                const vKey = getVerifyKey(f);
                 return myFormsVerifyMap[vKey]?.status === 'Fully Verified';
               });
               return (
@@ -703,8 +697,7 @@ export default function Dashboard() {
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {filteredForms.map((f, i) => {
-                  const product = (f.formFillingFor || f.tideProduct || f.brand || '').toLowerCase().trim();
-                  const vKey = product ? `${f.customerNumber}__${product}` : f.customerNumber;
+                  const vKey = getVerifyKey(f);
                   const vData = myFormsVerifyMap[vKey];
                   const vStatus = vData ? vData.status : (f.verificationStatus || 'Not Found');
                   const vColor = vStatus === 'Fully Verified' ? '#2e7d32' : vStatus === 'Partially Done' ? '#e65100' : vStatus === 'Not Verified' ? '#c62828' : '#757575';
@@ -1298,8 +1291,7 @@ export default function Dashboard() {
                     {isSelected && fseFormsList.length > 0 && (
                       <div style={{ marginTop: 8, background: '#fff', borderRadius: 10, border: '1px solid #e8f0e8', overflow: 'hidden', maxHeight: 400, overflowY: 'auto' }}>
                         {fseFormsList.map((f, fi) => {
-                          const product = (f.formFillingFor || f.tideProduct || f.brand || '').toLowerCase().trim();
-                          const vKey = product ? `${f.customerNumber}__${product}` : f.customerNumber;
+                          const vKey = getVerifyKey(f);
                           const v = fseVerifyMap[vKey];
                           const vStatus = v ? v.status : 'Not Found';
                           const vColor = vStatus === 'Fully Verified' ? '#2e7d32' : vStatus === 'Partially Done' ? '#e65100' : vStatus === 'Critical Failure' ? '#c62828' : '#757575';
@@ -1315,8 +1307,7 @@ export default function Dashboard() {
                                 </div>
                                 <span onClick={(e) => {
                                   e.stopPropagation();
-                                  const product = (f.formFillingFor || f.tideProduct || f.brand || '').toLowerCase().trim();
-                                  const vKey2 = product ? `${f.customerNumber}__${product}` : f.customerNumber;
+                                  const vKey2 = getVerifyKey(f);
                                   const vData = fseVerifyMap[vKey2];
                                   if (vData && vData.checks) {
                                     setVerifyDetail({ customerName: f.customerName, status: vData.status, checks: vData.checks, passed: vData.passed, total: vData.total });
@@ -1434,8 +1425,7 @@ export default function Dashboard() {
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {tlFormsModal.forms.map((f, fi) => {
-                    const product = (f.formFillingFor || f.tideProduct || f.brand || '').toLowerCase().trim();
-                    const vKey = product ? `${f.customerNumber}__${product}` : f.customerNumber;
+                    const vKey = getVerifyKey(f);
                     const v = tlFormsModal.verifyMap[vKey];
                     const vStatus = v ? v.status : 'Not Found';
                     const vColor = vStatus === 'Fully Verified' ? '#2e7d32' : vStatus === 'Partially Done' ? '#e65100' : vStatus === 'Critical Failure' ? '#c62828' : '#757575';
@@ -1454,11 +1444,11 @@ export default function Dashboard() {
                           </div>
                           <span
                             onClick={(e) => {
-                              e.stopPropagation();
-                              if (v && v.checks) {
-                                setVerifyDetail({ customerName: f.customerName, status: v.status, checks: v.checks, passed: v.passed, total: v.total });
-                              }
-                            }}
+                               e.stopPropagation();
+                               if (v && v.checks) {
+                                 setVerifyDetail({ customerName: f.customerName, status: v.status, checks: v.checks, passed: v.passed, total: v.total });
+                               }
+                             }}
                             style={{ padding: '2px 8px', borderRadius: 12, fontSize: 9, fontWeight: 700, background: vBg, color: vColor, flexShrink: 0, cursor: (v && v.checks) ? 'pointer' : 'default', transition: 'transform 0.15s' }}
                             onMouseOver={e => { if (v && v.checks) e.currentTarget.style.transform = 'scale(1.1)'; }}
                             onMouseOut={e => { e.currentTarget.style.transform = 'scale(1)'; }}
@@ -1488,8 +1478,7 @@ export default function Dashboard() {
 
       {/* Form Detail Modal — at root level to avoid overflow:hidden clipping */}
       {selectedForm && (() => {
-        const sfProduct = (selectedForm.formFillingFor || selectedForm.tideProduct || selectedForm.brand || '').toLowerCase().trim();
-        const sfVKey = sfProduct ? `${selectedForm.customerNumber}__${sfProduct}` : selectedForm.customerNumber;
+        const sfVKey = getVerifyKey(selectedForm);
         // Check both myFormsVerifyMap and tlFormsModal verifyMap for verification data
         const sfVerify = myFormsVerifyMap[sfVKey] || (tlFormsModal && tlFormsModal.verifyMap ? tlFormsModal.verifyMap[sfVKey] : null) || (fseVerifyMap ? fseVerifyMap[sfVKey] : null);
         const sfVStatus = sfVerify ? sfVerify.status : (selectedForm.verificationStatus || 'Not Found');
