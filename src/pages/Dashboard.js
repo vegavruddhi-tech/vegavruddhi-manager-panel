@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { API_BASE } from '../api';
 import TideMerchantTimeline from '../components/TideMerchantTimeline';
 import MeetingsModal from '../components/MeetingsModal';
+import { subscribeUserToPush } from '../pushSubscriptionHelper';
 
 const normalizeProduct = (product) => {
   const p = (product || '').toLowerCase().trim();
@@ -242,6 +243,14 @@ export default function Dashboard() {
     const mInterval = setInterval(refreshMeetings, 15000);
     return () => clearInterval(mInterval);
   }, [navigate, manager?.email]);
+
+  // Subscribe to push notifications when profile is loaded
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (token && manager) {
+      subscribeUserToPush(API_BASE, token);
+    }
+  }, [manager]);
 
   const handleLogout = () => {
     // Clear all manager caches
