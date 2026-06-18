@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard';
 import Profile from './pages/Profile';
 import MerchantForm from './pages/MerchantForm';
 import InstallPWA from './components/InstallPWA';
+import PullToRefresh from './components/PullToRefresh';
 
 function PrivateRoute({ children }) {
   return localStorage.getItem('token') ? children : <Navigate to="/" replace />;
@@ -13,16 +14,18 @@ function PrivateRoute({ children }) {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <InstallPWA />
-      <Routes>
-        <Route path="/"               element={<Login />} />
-        <Route path="/register"       element={<Register />} />
-        <Route path="/dashboard"      element={<PrivateRoute><Dashboard /></PrivateRoute>} />
-        <Route path="/profile"        element={<PrivateRoute><Profile /></PrivateRoute>} />
-        <Route path="/merchant-form"  element={<PrivateRoute><MerchantForm /></PrivateRoute>} />
-        <Route path="*"               element={<Navigate to="/" replace />} />
-      </Routes>
-    </BrowserRouter>
+    <PullToRefresh onRefresh={() => window.location.reload(true)}>
+      <BrowserRouter>
+        <InstallPWA />
+        <Routes>
+          <Route path="/"               element={<Login />} />
+          <Route path="/register"       element={<Register />} />
+          <Route path="/dashboard"      element={<PrivateRoute><Dashboard /></PrivateRoute>} />
+          <Route path="/profile"        element={<PrivateRoute><Profile /></PrivateRoute>} />
+          <Route path="/merchant-form"  element={<PrivateRoute><MerchantForm /></PrivateRoute>} />
+          <Route path="*"               element={<Navigate to="/" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </PullToRefresh>
   );
 }
