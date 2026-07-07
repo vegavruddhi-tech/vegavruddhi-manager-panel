@@ -59,6 +59,13 @@ export default function Dashboard() {
   const [meetingsOpen, setMeetingsOpen] = useState(false);
   const [meetingCount, setMeetingCount] = useState(0);
   
+  // Request modal for Edit/Delete
+  const [reqOpen,  setReqOpen]  = useState(false);
+  const [reqForm,  setReqForm]  = useState({ customerName: '', customerNumber: '', location: '', status: '', reason: '' });
+  const [reqError, setReqError] = useState('');
+  const [reqOk,    setReqOk]    = useState('');
+  const [reqSaving,setReqSaving]= useState(false);
+  
   // PWA Install state
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [showInstallButton, setShowInstallButton] = useState(false);
@@ -158,17 +165,17 @@ export default function Dashboard() {
           // Background: update verification counts after page renders
           setTimeout(async () => {
             try {
-              const formsRes = await fetch(`${API_BASE}/api/manager/kpi-detail?type=totalForms`, { headers: { Authorization: `Bearer ${token}` } });
+              const formsRes = await fetch(`${API_BASE}/api/manager/kpi-detail?type=totalForms&year=${selYear}&month=${selMonth}`, { headers: { Authorization: `Bearer ${token}` } });
               const allForms = await formsRes.json();
               if (Array.isArray(allForms) && allForms.length > 0) {
-                const vRes = await fetch(`${API_BASE}/api/verify/bulk-cached`, {
+                const vRes = await fetch(`${API_BASE}/api/verify/bulk-admin`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                   body: JSON.stringify({
                     phones: allForms.map(f => f.phone || ''),
                     names: allForms.map(f => f.customer || ''),
                     products: allForms.map(f => (f.product || '').toLowerCase().trim()),
-                    months: allForms.map(f => f.createdAt ? new Date(f.createdAt).toLocaleString('en-US', { month: 'long', year: 'numeric' }) : ''),
+                    months: allForms.map(f => (f._date || f.createdAt) ? new Date(f._date || f.createdAt).toLocaleString('en-US', { month: 'long', year: 'numeric' }) : ''),
                   }),
                 });
                 const vm = await vRes.json();
@@ -204,7 +211,7 @@ export default function Dashboard() {
           // Fetch verification for my forms
           if (data.length > 0) {
             try {
-              const vRes = await fetch(`${API_BASE}/api/verify/bulk-cached`, {
+              const vRes = await fetch(`${API_BASE}/api/verify/bulk-admin`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                 body: JSON.stringify({
@@ -280,18 +287,19 @@ export default function Dashboard() {
     setFseStats({});
 
     const token = localStorage.getItem('token');
-    const cacheKey = `fse_stats_${tl._id}`;
+    const cacheKey = `fse_stats_v3_${tl._id}_${selYear}_${selMonth}`;
 
     // Load from cache instantly (max 30 min old)
     const cached = localStorage.getItem(cacheKey);
     if (cached) {
       try {
-        const { fses: cachedFses, stats: cachedStats, forms: cachedForms, ts } = JSON.parse(cached);
+        const { fses: cachedFses, stats: cachedStats, forms: cachedForms, verifyMap: cachedVerifyMap, ts } = JSON.parse(cached);
         const age = Date.now() - (ts || 0);
         if (age < 30 * 60 * 1000) {
           setFses(cachedFses);
           setFseStats(cachedStats);
           setFseForms(cachedForms || []);
+          if (cachedVerifyMap) setFseVerifyMap(cachedVerifyMap);
           setFsesLoading(false);
         } else {
           localStorage.removeItem(cacheKey);
@@ -364,7 +372,7 @@ export default function Dashboard() {
 
         // Cache
         try {
-          localStorage.setItem(cacheKey, JSON.stringify({ fses: fseData, stats: statsMap, forms: formsData, ts: Date.now() }));
+          localStorage.setItem(cacheKey, JSON.stringify({ fses: fseData, stats: statsMap, forms: formsData, verifyMap, ts: Date.now() }));
         } catch {}
       }
     } catch (err) {
@@ -417,7 +425,7 @@ export default function Dashboard() {
     }
   };
 
-  const fetchKpis = (token, df, fd, td, sy, sm) => {
+  const fetchKpis = (token, df, fd, td, sy = selYear, sm = selMonth) => {
     const params = new URLSearchParams();
     if (df && df !== 'all') params.set('dateFilter', df);
     if (fd) params.set('fromDate', fd);
@@ -428,7 +436,39 @@ export default function Dashboard() {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(r => r.json())
-      .then(data => setKpis(data))
+      .then(data => {
+        if (data) {
+          setKpis(data);
+          try { localStorage.setItem('manager_kpis', JSON.stringify(data)); } catch {}
+          setTimeout(async () => {
+            try {
+              const formsRes = await fetch(`${API_BASE}/api/manager/kpi-detail?type=totalForms&${params.toString()}`, { headers: { Authorization: `Bearer ${token}` } });
+              const allForms = await formsRes.json();
+              if (Array.isArray(allForms) && allForms.length > 0) {
+                const vRes = await fetch(`${API_BASE}/api/verify/bulk-admin`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                  body: JSON.stringify({
+                    phones: allForms.map(f => f.phone || ''),
+                    names: allForms.map(f => f.customer || ''),
+                    products: allForms.map(f => (f.product || '').toLowerCase().trim()),
+                    months: allForms.map(f => (f._date || f.createdAt) ? new Date(f._date || f.createdAt).toLocaleString('en-US', { month: 'long', year: 'numeric' }) : ''),
+                  }),
+                });
+                const vm = await vRes.json();
+                let fv = 0, pd = 0;
+                allForms.forEach(f => {
+                  const vKey = getVerifyKey(f);
+                  const status = vm[vKey]?.status;
+                  if (status === 'Fully Verified') fv++;
+                  else if (status === 'Partially Done') pd++;
+                });
+                setKpis(prev => prev ? { ...prev, fullyVerified: fv, partiallyDone: pd } : prev);
+              }
+            } catch {}
+          }, 300);
+        }
+      })
       .catch(err => console.error('Failed to load KPIs:', err));
   };
 
@@ -437,7 +477,14 @@ export default function Dashboard() {
     setKpiSearch('');
     const token = localStorage.getItem('token');
     try {
-      const res = await fetch(`${API_BASE}/api/manager/kpi-detail?type=${type}`, {
+      const params = new URLSearchParams();
+      if (dateFilter && dateFilter !== 'all') params.set('dateFilter', dateFilter);
+      if (fromDate) params.set('fromDate', fromDate);
+      if (toDate) params.set('toDate', toDate);
+      if (selYear) params.set('year', selYear);
+      if (selMonth !== '') params.set('month', selMonth);
+      params.set('type', type);
+      const res = await fetch(`${API_BASE}/api/manager/kpi-detail?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
@@ -446,6 +493,41 @@ export default function Dashboard() {
       console.error('KPI detail error:', err);
       setKpiModal({ title, type, data: [], loading: false });
     }
+  };
+
+  const openEdit = () => {
+    setReqForm({ customerName: selectedForm.customerName, customerNumber: selectedForm.customerNumber, location: selectedForm.location, status: selectedForm.status, reason: '' });
+    setReqError(''); setReqOk('');
+    setReqOpen(true);
+  };
+
+  const openDelete = () => {
+    const reason = window.prompt(`Reason for deleting "${selectedForm?.customerName}"? (required)`);
+    if (!reason?.trim()) return;
+    const token = localStorage.getItem('token');
+    fetch(`${API_BASE}/api/requests/merchant-delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({ merchantId: selectedForm._id, merchantName: selectedForm.customerName, reason: reason.trim() })
+    }).then(() => alert('✓ Delete request sent to admin for approval.')).catch(() => alert('Server error.'));
+  };
+
+  const sendRequest = async () => {
+    if (!reqForm.reason.trim()) { setReqError('Please provide a reason.'); return; }
+    setReqSaving(true); setReqError('');
+    const token = localStorage.getItem('token');
+    try {
+      const res  = await fetch(`${API_BASE}/api/requests/merchant-edit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+        body: JSON.stringify({ merchantId: selectedForm._id, merchantName: selectedForm.customerName, reason: reqForm.reason, changes: { customerName: reqForm.customerName, customerNumber: reqForm.customerNumber, location: reqForm.location, status: reqForm.status } })
+      });
+      const data = await res.json();
+      if (!res.ok) { setReqError(data.message || 'Failed'); return; }
+      setReqOk('✓ Edit request sent! Admin will review and apply the change.');
+      setTimeout(() => setReqOpen(false), 2000);
+    } catch { setReqError('Server error.'); }
+    finally { setReqSaving(false); }
   };
 
   if (loading && !manager) {
@@ -592,9 +674,20 @@ export default function Dashboard() {
               let totalPoints = 0;
               myForms.forEach(f => {
                 if (f.status === 'Ready for Onboarding') {
-                  // Filter by selected month/year
-                  if (selYear && new Date(f.createdAt).getFullYear() !== parseInt(selYear)) return;
-                  if (selMonth !== '' && new Date(f.createdAt).getMonth() !== parseInt(selMonth)) return;
+                  const d = new Date(f.createdAt);
+                  if (selYear && d.getFullYear() !== parseInt(selYear)) return;
+                  if (selMonth !== '' && d.getMonth() !== parseInt(selMonth)) return;
+                  if (dateFilter === 'today') {
+                    const today = new Date();
+                    if (d.toDateString() !== today.toDateString()) return;
+                  } else if (dateFilter === 'week') {
+                    const now = new Date();
+                    const ws = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
+                    if (d < ws) return;
+                  } else if (dateFilter === 'custom' && (fromDate || toDate)) {
+                    if (fromDate && d < new Date(fromDate)) return;
+                    if (toDate && d > new Date(toDate + 'T23:59:59')) return;
+                  }
                   const vKey = getVerifyKey(f);
                   const vStatus = myFormsVerifyMap[vKey]?.status;
                   if (vStatus === 'Fully Verified') {
@@ -1493,6 +1586,8 @@ export default function Dashboard() {
         const sfVStatus = sfVerify ? sfVerify.status : (selectedForm.verificationStatus || 'Not Found');
         const sfVColor = sfVStatus === 'Fully Verified' ? '#2e7d32' : sfVStatus === 'Partially Done' ? '#e65100' : sfVStatus === 'Critical Failure' ? '#c62828' : '#757575';
         const sfVBg = sfVStatus === 'Fully Verified' ? '#e6f4ea' : sfVStatus === 'Partially Done' ? '#fff3e0' : sfVStatus === 'Critical Failure' ? '#fdecea' : '#f5f5f5';
+        
+        const isMyForm = myForms.some(f => f._id === selectedForm._id);
         return (
         <div
           style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
@@ -1509,6 +1604,12 @@ export default function Dashboard() {
               </div>
               <button onClick={() => setSelectedForm(null)} style={{ width: 32, height: 32, borderRadius: '50%', border: 'none', background: 'rgba(255,255,255,0.2)', cursor: 'pointer', fontSize: 18, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
             </div>
+            {isMyForm && (
+              <div style={{ padding: '12px 24px', background: '#f8fcf9', borderBottom: '1px solid #f0f5f0', display: 'flex', gap: 10 }}>
+                <button onClick={openEdit} style={{ flex: 1, padding: '8px', borderRadius: 8, border: '1.5px solid var(--green-dark)', background: '#fff', color: 'var(--green-dark)', fontWeight: 700, fontSize: 12, cursor: 'pointer', transition: 'all 0.2s' }}>🔔 Request Edit</button>
+                <button onClick={openDelete} style={{ flex: 1, padding: '8px', borderRadius: 8, border: 'none', background: '#ffebee', color: '#c62828', fontWeight: 700, fontSize: 12, cursor: 'pointer', transition: 'all 0.2s' }}>🔔 Request Delete</button>
+              </div>
+            )}
             <div style={{ padding: 20, overflowY: 'auto', maxHeight: 'calc(85vh - 80px)' }}>
               {/* Verification Status Banner */}
               <div
@@ -1581,6 +1682,46 @@ export default function Dashboard() {
           token={localStorage.getItem('token')}
         />
       )}
+
+      {/* Request modal */}
+      {reqOpen && selectedForm && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 100000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={e => { if (e.target === e.currentTarget) setReqOpen(false); }}>
+          <div style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: 480, overflow: 'hidden', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
+            <div style={{ padding: '18px 24px', borderBottom: '1px solid #f0f5f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <h3 style={{ fontSize: 16, fontWeight: 800, margin: 0 }}>🔔 Request Merchant Edit</h3>
+              <button onClick={() => setReqOpen(false)} style={{ width: 32, height: 32, borderRadius: '50%', border: 'none', background: '#f5f5f5', cursor: 'pointer', fontSize: 14, color: '#888', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+            </div>
+            <div style={{ padding: 24, overflowY: 'auto', maxHeight: '60vh' }}>
+              <div style={{ background: '#e3f2fd', border: '1px solid #90caf9', borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: 12, color: '#1565c0' }}>
+                ℹ Your request will be sent to admin for review. Changes will be applied after approval.
+              </div>
+              {[['Customer Name','customerName','text'],['Customer Number','customerNumber','tel'],['Location','location','text']].map(([lbl, key, type]) => (
+                <div key={key} style={{ marginBottom: 14 }}>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#555', marginBottom: 6 }}>{lbl}</label>
+                  <input type={type} value={reqForm[key]} onChange={e => setReqForm(f => ({ ...f, [key]: e.target.value }))} style={{ width: '100%', padding: '10px 14px', border: '1.5px solid #dde8dd', borderRadius: 8, fontSize: 14, outline: 'none' }} />
+                </div>
+              ))}
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#555', marginBottom: 6 }}>Visit Status</label>
+                <select value={reqForm.status} onChange={e => setReqForm(f => ({ ...f, status: e.target.value }))} style={{ width: '100%', padding: '10px 14px', border: '1.5px solid #dde8dd', borderRadius: 8, fontSize: 14, outline: 'none', background: '#fff' }}>
+                  {['Ready for Onboarding','Not Interested','Try but not done due to error','Need to visit again'].map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#555', marginBottom: 6 }}>Reason for request <span style={{ color: '#c62828' }}>*</span></label>
+                <textarea rows={3} value={reqForm.reason} onChange={e => setReqForm(f => ({ ...f, reason: e.target.value }))} placeholder="Why do you want this change?" style={{ width: '100%', padding: '10px 14px', border: '1.5px solid #dde8dd', borderRadius: 8, fontSize: 14, outline: 'none', resize: 'vertical' }} />
+              </div>
+              {reqError && <div style={{ background: '#fdecea', color: '#c62828', padding: '10px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600, marginBottom: 14 }}>{reqError}</div>}
+              {reqOk    && <div style={{ background: '#e6f4ea', color: '#2e7d32', padding: '10px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600, marginBottom: 14 }}>{reqOk}</div>}
+            </div>
+            <div style={{ padding: '16px 24px', borderTop: '1px solid #f0f5f0', display: 'flex', justifyContent: 'flex-end', gap: 10, background: '#f9fcf9' }}>
+              <button onClick={() => setReqOpen(false)} style={{ padding: '8px 16px', borderRadius: 8, border: '1.5px solid #dde8dd', background: '#fff', color: '#555', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+              <button onClick={sendRequest} disabled={reqSaving} style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: 'var(--green-dark)', color: '#fff', fontWeight: 700, fontSize: 13, cursor: reqSaving ? 'not-allowed' : 'pointer', opacity: reqSaving ? 0.7 : 1 }}>{reqSaving ? 'Sending...' : '🔔 Send Request'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
