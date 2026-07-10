@@ -11,6 +11,21 @@ export default function Login() {
   const [isWarn,  setIsWarn]  = useState(false);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tokenFromURL = params.get('token') || params.get('adminToken');
+    const viewAsFromURL = params.get('viewAs');
+    if (tokenFromURL) {
+      localStorage.clear();
+      sessionStorage.setItem('mgr_impersonationToken', tokenFromURL);
+      localStorage.setItem('token', tokenFromURL);
+      if (viewAsFromURL) {
+        sessionStorage.setItem('mgr_viewAsEmail', viewAsFromURL);
+        localStorage.setItem('viewAsEmail', viewAsFromURL);
+        localStorage.setItem('isImpersonating', 'true');
+      }
+      navigate('/dashboard');
+      return;
+    }
     if (localStorage.getItem('token')) navigate('/dashboard');
   }, [navigate]);
 

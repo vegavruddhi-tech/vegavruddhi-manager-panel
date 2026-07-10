@@ -9,7 +9,10 @@ import InstallPWA from './components/InstallPWA';
 import PullToRefresh from './components/PullToRefresh';
 
 function PrivateRoute({ children }) {
-  return localStorage.getItem('token') ? children : <Navigate to="/" replace />;
+  const params = new URLSearchParams(window.location.search);
+  const urlToken = params.get('adminToken') || params.get('token') || params.get('viewAs');
+  const sessToken = sessionStorage.getItem('mgr_impersonationToken') || localStorage.getItem('token') || (localStorage.getItem('isImpersonating') === 'true' ? 'impersonating' : null);
+  return (sessToken || urlToken) ? children : <Navigate to="/" replace />;
 }
 
 function AutoUpdateChecker() {

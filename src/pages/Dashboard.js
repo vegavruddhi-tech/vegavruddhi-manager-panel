@@ -25,6 +25,50 @@ const getVerifyKey = (f) => {
 
 export default function Dashboard() {
   const navigate = useNavigate();
+
+  // ✅ Admin impersonation support — initialized SYNCHRONOUSLY from URL/sessionStorage
+  // Runs inside useState lazy initializer (once, before any render commits)
+  const _initImpersonation = () => {
+    const params = new URLSearchParams(window.location.search);
+    const viewAs = params.get('viewAs');
+    const urlToken = params.get('token') || params.get('adminToken');
+    if (viewAs && urlToken) {
+      sessionStorage.setItem('mgr_impersonationToken', urlToken);
+      sessionStorage.setItem('mgr_viewAsEmail', viewAs);
+      localStorage.setItem('token', urlToken);
+      localStorage.setItem('viewAsEmail', viewAs);
+      localStorage.setItem('isImpersonating', 'true');
+      window.history.replaceState({}, '', window.location.pathname);
+      return { isAdminView: true, adminViewEmail: viewAs, impersonationToken: urlToken };
+    }
+    const sessToken = sessionStorage.getItem('mgr_impersonationToken') || (localStorage.getItem('isImpersonating') === 'true' ? localStorage.getItem('token') : null);
+    const sessEmail = sessionStorage.getItem('mgr_viewAsEmail') || localStorage.getItem('viewAsEmail');
+    if (sessToken && sessEmail) {
+      return { isAdminView: true, adminViewEmail: sessEmail, impersonationToken: sessToken };
+    }
+    return { isAdminView: false, adminViewEmail: '', impersonationToken: null };
+  };
+
+  const [isAdminView] = useState(() => _initImpersonation().isAdminView);
+  const [adminViewEmail] = useState(() => _initImpersonation().adminViewEmail);
+  const [impersonationToken] = useState(() => _initImpersonation().impersonationToken);
+
+  const activeToken = isAdminView ? impersonationToken : localStorage.getItem('token');
+  const fetchedRef = React.useRef(false);
+
+  const handleExitAdminView = () => {
+    sessionStorage.removeItem('mgr_impersonationToken');
+    sessionStorage.removeItem('mgr_viewAsEmail');
+    if (window.opener && !window.opener.closed) {
+      window.close();
+    } else {
+      const adminUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+        ? 'http://localhost:3000'
+        : 'https://vegavruddhi-admin-panel.vercel.app';
+      window.location.href = adminUrl;
+    }
+  };
+
   const [manager, setManager] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState('');
@@ -106,8 +150,10 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (!token) { navigate('/'); return; }
+    const token = activeToken || localStorage.getItem('token');
+    if (!token) return;
+    if (fetchedRef.current) return;
+    fetchedRef.current = true;
 
     // Try cached data first for instant render
     const cached = localStorage.getItem('manager');
@@ -120,7 +166,7 @@ export default function Dashboard() {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(r => {
-        if (r.status === 401) { handleUnauthorized(); return null; }
+        if (r.status === 401 && !isAdminView) { handleUnauthorized(); return null; }
         return r.json();
       })
       .then(data => {
@@ -155,7 +201,7 @@ export default function Dashboard() {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(r => {
-        if (r.status === 401) { handleUnauthorized(); return null; }
+        if (r.status === 401 && !isAdminView) { handleUnauthorized(); return null; }
         return r.json();
       })
       .then(data => {
@@ -166,25 +212,14 @@ export default function Dashboard() {
           setTimeout(async () => {
             try {
               const formsRes = await fetch(`${API_BASE}/api/manager/kpi-detail?type=totalForms&year=${selYear}&month=${selMonth}`, { headers: { Authorization: `Bearer ${token}` } });
-              const allForms = await formsRes.json();
-              if (Array.isArray(allForms) && allForms.length > 0) {
-                const vRes = await fetch(`${API_BASE}/api/verify/bulk-admin`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                  body: JSON.stringify({
-                    phones: allForms.map(f => f.phone || ''),
-                    names: allForms.map(f => f.customer || ''),
-                    products: allForms.map(f => (f.product || '').toLowerCase().trim()),
-                    months: allForms.map(f => (f._date || f.createdAt) ? new Date(f._date || f.createdAt).toLocaleString('en-US', { month: 'long', year: 'numeric' }) : ''),
-                  }),
-                });
-                const vm = await vRes.json();
+              const formsData = await formsRes.json();
+              if (Array.isArray(formsData)) {
                 let fv = 0, pd = 0;
-                allForms.forEach(f => {
-                  const vKey = getVerifyKey(f);
-                  const status = vm[vKey]?.status;
-                  if (status === 'Fully Verified') fv++;
-                  else if (status === 'Partially Done') pd++;
+                formsData.forEach(f => {
+                  const key = getVerifyKey(f);
+                  const status = fseVerifyMap[key]?.status || f.verificationStatus || 'Pending';
+                  if (status === 'Verified') fv++;
+                  else if (status === 'Partially Verified') pd++;
                 });
                 setKpis(prev => prev ? { ...prev, fullyVerified: fv, partiallyDone: pd } : prev);
               }
@@ -229,11 +264,14 @@ export default function Dashboard() {
       })
       .catch(err => console.error('Failed to load my forms:', err))
       .finally(() => setMyFormsLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdminView]);
 
-    // Initial meetings count fetch
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    const email = manager?.email;
+    if (!token || !email) return;
     const refreshMeetings = () => {
-      const email = manager?.email;
-      if (!token || !email) return;
       fetch(`${API_BASE}/api/meetings/my-meetings?email=${encodeURIComponent(email)}`, {
         headers: { Authorization: 'Bearer ' + token }
       })
@@ -245,11 +283,10 @@ export default function Dashboard() {
         })
         .catch(() => {});
     };
-    
     refreshMeetings();
     const mInterval = setInterval(refreshMeetings, 15000);
     return () => clearInterval(mInterval);
-  }, [navigate, manager?.email]);
+  }, [manager?.email]);
 
   // Subscribe to push notifications when profile is loaded
   useEffect(() => {
@@ -270,6 +307,7 @@ export default function Dashboard() {
   };
 
   const handleUnauthorized = () => {
+    if (isAdminView) return;
     Object.keys(localStorage).forEach(k => {
       if (k.startsWith('fse_stats_') || k === 'manager_my_forms') localStorage.removeItem(k);
     });
@@ -652,6 +690,23 @@ export default function Dashboard() {
 
       {/* Main content */}
       <div className="main-content">
+        {/* Admin Impersonation Banner */}
+        {isAdminView && (
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            background: '#e3f2fd', border: '1px solid #90caf9', borderRadius: 10,
+            padding: '10px 18px', marginBottom: 16, flexWrap: 'wrap', gap: 8
+          }}>
+            <span style={{ fontWeight: 700, color: '#0d47a1', fontSize: 13 }}>
+              👁️ Viewing Manager Dashboard as <strong>{manager?.name || adminViewEmail}</strong> ({adminViewEmail}) — Admin Mode
+            </span>
+            <button onClick={handleExitAdminView} style={{
+              background: '#1976d2', color: '#fff', border: 'none', borderRadius: 8,
+              padding: '7px 18px', fontWeight: 700, fontSize: 13, cursor: 'pointer'
+            }}>⬅ Return to Admin Approvals</button>
+          </div>
+        )}
+
         {error && (
           <div className="error-msg" style={{ display: 'block', marginBottom: 20 }}>{error}</div>
         )}
