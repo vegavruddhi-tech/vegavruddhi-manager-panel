@@ -22,11 +22,50 @@ export default function Register() {
 
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
 
-  const setPhotoFile = (file) => {
-    setPhoto(file);
+  // Automatically compress image before upload (converts to JPEG ~300KB max)
+  const compressImage = (file, maxWidth = 1000, quality = 0.7) => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = (event) => {
+        const img = new Image();
+        img.src = event.target.result;
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+
+          if (width > maxWidth) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+
+          canvas.toBlob((blob) => {
+            if (!blob) {
+              resolve(file);
+              return;
+            }
+            resolve(new File([blob], file.name.replace(/\.[^/.]+$/, "") + ".jpg", { type: 'image/jpeg' }));
+          }, 'image/jpeg', quality);
+        };
+      };
+    });
+  };
+
+  const setPhotoFile = async (file) => {
+    if (!file) return;
+    // Compress if larger than 500 KB
+    const finalFile = file.size > 500 * 1024 ? await compressImage(file) : file;
+    
+    setPhoto(finalFile);
     const reader = new FileReader();
     reader.onload = (e) => setPhotoPreview(e.target.result);
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(finalFile);
   };
 
   const openCamera = async () => {
@@ -52,7 +91,7 @@ export default function Register() {
       if (!blob) return;
       setPhotoFile(new File([blob], 'photo-' + Date.now() + '.jpg', { type: 'image/jpeg' }));
       stopCamera();
-    }, 'image/jpeg', 0.9);
+    }, 'image/jpeg', 0.7);
   };
 
   const stopCamera = () => {
@@ -64,6 +103,7 @@ export default function Register() {
     e.preventDefault();
     setError(''); setSuccess('');
     if (!photo) { setError('Profile photo is required'); return; }
+    if (photo.size > 3 * 1024 * 1024) { setError('Profile photo is too large. Please select an image under 3 MB.'); return; }
 
     const fd = new FormData();
     Object.entries(form).forEach(([k, v]) => fd.append(k, v));
