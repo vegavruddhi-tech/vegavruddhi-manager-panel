@@ -136,6 +136,23 @@ export default function MerchantForm() {
     if (customerNumber.length !== 10) { setError('Customer number must be exactly 10 digits.'); return; }
     if (!isOnboarding && !reason.trim()) { setError('Please provide a reason.'); return; }
 
+    // 🔥 NEW: Validate brand, sub-product and dynamic fields are filled when onboarding
+    if (isOnboarding && formConfig) {
+      if (!brand) { setError('Please select a Brand.'); return; }
+      const selectedBrand = formConfig.brands.find(b => b.name === brand);
+      if (selectedBrand?.hasSubProducts && !tideProduct) {
+        setError('Please select a Product.'); return;
+      }
+      const fields = selectedBrand?.hasSubProducts
+        ? selectedBrand.products.find(p => p.name === tideProduct)?.fields || []
+        : selectedBrand?.fields || [];
+      for (const f of fields) {
+        if (!dynamicData[f.name] || !String(dynamicData[f.name]).trim()) {
+          setError(`Please fill in: ${f.label}`); return;
+        }
+      }
+    }
+
     const payload = {
       customerName, customerNumber, location, status,
       ...(isOnboarding && brand ? { brand } : {}),
@@ -290,7 +307,7 @@ export default function MerchantForm() {
                         : selectedBrand.fields || [];
 
                       return fields.map((f, i) => (
-                        <FormGroup key={i} label={f.label}>
+                        <FormGroup key={i} label={f.label} required>
                           {f.type === 'radio' ? (
                             <RadioGroup 
                               name={f.name} 
