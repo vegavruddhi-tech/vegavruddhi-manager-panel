@@ -23,6 +23,95 @@ const getVerifyKey = (f) => {
   return product ? `${phone}__${product}__${month}` : `${phone}__${month}`;
 };
 
+function formatProductDisplay(f, info) {
+  const baseProduct = f.formFillingFor
+    || (f.attemptedProducts?.join(', '))
+    || (f.brand && f.tideProduct ? `${f.tideProduct}` : f.brand)
+    || '–';
+
+  if (baseProduct === '–') return baseProduct;
+  if (baseProduct.includes('(')) return baseProduct;
+
+  let subType = '';
+  const productKey = baseProduct.toLowerCase().trim();
+  const cfg = window.dynamicPointsMap?.[productKey];
+
+  if (cfg) {
+    if (cfg.type === 'mapped' && cfg.fieldMapping?.mappedColumn) {
+      const col = cfg.fieldMapping.mappedColumn;
+      let val = String(f[col] || '').trim();
+      if (!val && info?.record) {
+        val = String(info.record[col] || info.record[col.toLowerCase()] || '').trim();
+      }
+      if (!val && info?.checks && Array.isArray(info.checks)) {
+        const match = info.checks.find(c => c.field && c.field.toLowerCase() === col.toLowerCase());
+        if (match?.sheetValue) val = String(match.sheetValue).trim();
+        if (!val) {
+          const broader = info.checks.find(c => c.field && c.field.toLowerCase().includes(col.toLowerCase()));
+          if (broader?.sheetValue) val = String(broader.sheetValue).trim();
+        }
+      }
+      if (!val && info?.points !== undefined && Array.isArray(cfg.valueMapping)) {
+        const mapped = cfg.valueMapping.find(m => Number(m.points) === Number(info.points));
+        if (mapped && mapped.value) val = String(mapped.value).trim();
+      }
+      if (val) {
+        const num = parseFloat(val);
+        subType = !isNaN(num) ? `${num}` : val;
+      }
+    } else if (cfg.type === 'complex' && cfg.fieldMapping) {
+      const planField = cfg.fieldMapping.planField || 'planName';
+      const tierField = cfg.fieldMapping.tierField || 'tierName';
+      const planVal = String(f[planField] || '').trim();
+      const tierVal = String(f[tierField] || '').trim();
+      if (planVal && tierVal) subType = `${planVal} - ${tierVal}`;
+      else if (planVal) subType = planVal;
+      else if (tierVal) subType = tierVal;
+    }
+  }
+
+  if (!subType && productKey === 'tide insurance') {
+    let val = String(f.ins_amount || f.tideIns_amount || f.amount || '').trim();
+    if (!val && info?.checks && Array.isArray(info.checks)) {
+      const match = info.checks.find(c => c.field && (c.field.toLowerCase() === 'amount' || c.field.toLowerCase().includes('amount') || c.field.toLowerCase().includes('plan')));
+      if (match?.sheetValue) val = String(match.sheetValue).trim();
+    }
+    if (!val && info?.record) {
+      val = String(info.record.amount || info.record.Amount || '').trim();
+    }
+    if (val) {
+      const num = parseFloat(val);
+      subType = !isNaN(num) ? `${num}` : val;
+    }
+  }
+
+  let insuranceType = '';
+  if (productKey === 'tide insurance' || productKey === 'insurance' || productKey.includes('insurance')) {
+    const getVal = (...keys) => {
+      for (const k of keys) {
+        if (f?.[k]) return f[k];
+        if (info?.record?.[k]) return info.record[k];
+        if (info?.checks && Array.isArray(info.checks)) {
+          const check = info.checks.find(c => c.field && c.field.toLowerCase() === k.toLowerCase());
+          if (check?.actual || check?.sheetValue) return check.actual || check.sheetValue;
+        }
+      }
+      return '';
+    };
+    insuranceType = getVal('tideIns_type', 'tideInsType', 'insurance_plan', 'ins_insuranceType', 'insuranceType', 'insurance_type');
+  }
+
+  let displayLabel = baseProduct;
+  if (subType) {
+    const cleanSub = String(subType).replace('₹', '');
+    displayLabel += ` (₹${cleanSub})`;
+  }
+  if (insuranceType) {
+    displayLabel += ` (${insuranceType})`;
+  }
+  return displayLabel;
+}
+
 export default function Dashboard() {
   const navigate = useNavigate();
 
@@ -873,7 +962,12 @@ export default function Dashboard() {
                         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 12, color: '#888' }}>
                           {f.customerNumber && <span>📱 {f.customerNumber}</span>}
                           {f.location && <span>📍 {f.location}</span>}
-                          {(f.formFillingFor || f.brand) && <span>📦 {f.formFillingFor || f.brand}</span>}
+                          {(() => {
+                            const vKey = getVerifyKey(f);
+                            const vData = myFormsVerifyMap[vKey];
+                            const productStr = formatProductDisplay(f, vData);
+                            return productStr !== '–' && <span>📦 {productStr}</span>;
+                          })()}
                           {f.createdAt && <span>📅 {new Date(f.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</span>}
                         </div>
                       </div>
@@ -1475,7 +1569,12 @@ export default function Dashboard() {
                               </div>
                               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: 11, color: '#888' }}>
                                 <span>📱 {f.customerNumber || '–'}</span>
-                                <span>📦 {f.formFillingFor || f.tideProduct || f.brand || '–'}</span>
+                                {(() => {
+                                  const vKey = getVerifyKey(f);
+                                  const vData = fseVerifyMap[vKey];
+                                  const productStr = formatProductDisplay(f, vData);
+                                  return productStr !== '–' && <span>📦 {productStr}</span>;
+                                })()}
                                 <span style={{ padding: '1px 6px', borderRadius: 10, fontSize: 9, fontWeight: 700, background: sBg, color: sColor }}>
                                   {f.status === 'Ready for Onboarding' ? 'Onboarding' : f.status || '–'}
                                 </span>
@@ -1615,7 +1714,10 @@ export default function Dashboard() {
                         </div>
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: 11, color: '#888' }}>
                           <span>📱 {f.customerNumber || '–'}</span>
-                          <span>📦 {f.formFillingFor || f.tideProduct || f.brand || '–'}</span>
+                          {(() => {
+                            const productStr = formatProductDisplay(f, v);
+                            return productStr !== '–' && <span>📦 {productStr}</span>;
+                          })()}
                           {f.createdAt && <span>📅 {new Date(f.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>}
                           {f.customerNumber && (f.formFillingFor || f.tideProduct || f.brand || '').toLowerCase().trim() === 'tide' && (
                             <div onClick={e => e.stopPropagation()} style={{ display: 'inline-flex' }}>
