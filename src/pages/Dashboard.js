@@ -479,13 +479,14 @@ export default function Dashboard() {
         const statsMap = {};
         formsData.forEach(f => {
           const name = (f.employeeName || '').trim().toLowerCase();
-          if (!statsMap[name]) statsMap[name] = { total: 0, fullyVerified: 0, partiallyDone: 0, notInterested: 0, notVerified: 0 };
+          if (!statsMap[name]) statsMap[name] = { total: 0, fullyVerified: 0, alreadyVerified: 0, partiallyDone: 0, notInterested: 0, notVerified: 0 };
           statsMap[name].total++;
           const vKey = getVerifyKey(f);
           const verification = verifyMap[vKey];
           const st = (f.status || '').trim();
           if (verification) {
             if (verification.status === 'Fully Verified') statsMap[name].fullyVerified++;
+            else if (verification.status === 'Already Verified') statsMap[name].alreadyVerified++;
             else if (verification.status === 'Partially Done') statsMap[name].partiallyDone++;
             else if (st === 'Not Interested') statsMap[name].notInterested++;
             else statsMap[name].notVerified++;
@@ -946,8 +947,8 @@ export default function Dashboard() {
                   const vKey = getVerifyKey(f);
                   const vData = myFormsVerifyMap[vKey];
                   const vStatus = vData ? vData.status : (f.verificationStatus || 'Not Found');
-                  const vColor = vStatus === 'Fully Verified' ? '#2e7d32' : vStatus === 'Partially Done' ? '#e65100' : vStatus === 'Not Verified' ? '#c62828' : '#757575';
-                  const vBg = vStatus === 'Fully Verified' ? '#e6f4ea' : vStatus === 'Partially Done' ? '#fff3e0' : vStatus === 'Not Verified' ? '#fdecea' : '#f5f5f5';
+                  const vColor = vStatus === 'Fully Verified' ? '#2e7d32' : vStatus === 'Already Verified' ? '#e65100' : vStatus === 'Partially Done' ? '#e65100' : vStatus === 'Not Verified' ? '#c62828' : '#757575';
+                  const vBg = vStatus === 'Fully Verified' ? '#e6f4ea' : vStatus === 'Already Verified' ? '#fff3e0' : vStatus === 'Partially Done' ? '#fff3e0' : vStatus === 'Not Verified' ? '#fdecea' : '#f5f5f5';
                   return (
                     <div key={f._id || i} onClick={() => { setSelectedForm(f); }} style={{
                       background: '#fff', borderRadius: 12, padding: '14px 16px',
@@ -1085,6 +1086,7 @@ export default function Dashboard() {
               {[
                 { label: 'Total Forms',     value: kpis.totalForms,    color: '#1565c0', bg: '#e3f2fd', icon: '📋', type: 'totalForms'   },
                 { label: 'Fully Verified',  value: kpis.fullyVerified, color: '#2e7d32', bg: '#e6f4ea', icon: '✅', type: 'fullyVerified' },
+                { label: 'Already Verified',value: kpis.alreadyVerified || 0, color: '#e65100', bg: '#fff3e0', icon: '⧉', type: 'alreadyVerified' },
                 { label: 'Partially Done',  value: kpis.partiallyDone, color: '#e65100', bg: '#fff3e0', icon: '◑',  type: 'partiallyDone' },
                 { label: 'Not Interested',  value: kpis.notInterested, color: '#c62828', bg: '#fdecea', icon: '❌', type: 'notInterested' },
                 { label: "Today's Forms",   value: kpis.todayForms,    color: '#7c3aed', bg: '#f3e8ff', icon: '📅', type: 'today'         },
@@ -1376,16 +1378,18 @@ export default function Dashboard() {
                             padding: '3px 10px', borderRadius: 20, fontSize: 10, fontWeight: 700, flexShrink: 0, marginLeft: 8,
                             background:
                               r.verificationStatus === 'Fully Verified'   ? '#e6f4ea' :
+                              r.verificationStatus === 'Already Verified' ? '#fff3e0' :
                               r.verificationStatus === 'Partially Done'   ? '#fff3e0' :
                               r.status === 'Ready for Onboarding'         ? '#e6f4ea' :
                               r.status === 'Not Interested'               ? '#fdecea' : '#fff3e0',
                             color:
                               r.verificationStatus === 'Fully Verified'   ? '#2e7d32' :
+                              r.verificationStatus === 'Already Verified' ? '#e65100' :
                               r.verificationStatus === 'Partially Done'   ? '#e65100' :
                               r.status === 'Ready for Onboarding'         ? '#2e7d32' :
                               r.status === 'Not Interested'               ? '#c62828' : '#e65100',
                           }}>
-                            {(r.verificationStatus === 'Fully Verified' || r.verificationStatus === 'Partially Done')
+                            {(r.verificationStatus === 'Fully Verified' || r.verificationStatus === 'Already Verified' || r.verificationStatus === 'Partially Done')
                               ? r.verificationStatus
                               : r.status === 'Ready for Onboarding'
                                 ? 'Fully Verified'
@@ -1545,8 +1549,8 @@ export default function Dashboard() {
                           const vKey = getVerifyKey(f);
                           const v = fseVerifyMap[vKey];
                           const vStatus = v ? v.status : 'Not Found';
-                          const vColor = vStatus === 'Fully Verified' ? '#2e7d32' : vStatus === 'Partially Done' ? '#e65100' : vStatus === 'Critical Failure' ? '#c62828' : '#757575';
-                          const vBg = vStatus === 'Fully Verified' ? '#e6f4ea' : vStatus === 'Partially Done' ? '#fff3e0' : vStatus === 'Critical Failure' ? '#fdecea' : '#f5f5f5';
+                          const vColor = vStatus === 'Fully Verified' ? '#2e7d32' : vStatus === 'Already Verified' ? '#e65100' : vStatus === 'Partially Done' ? '#e65100' : vStatus === 'Critical Failure' ? '#c62828' : '#757575';
+                          const vBg = vStatus === 'Fully Verified' ? '#e6f4ea' : vStatus === 'Already Verified' ? '#fff3e0' : vStatus === 'Partially Done' ? '#fff3e0' : vStatus === 'Critical Failure' ? '#fdecea' : '#f5f5f5';
                           const sBg = f.status === 'Ready for Onboarding' ? '#e6f4ea' : f.status === 'Not Interested' ? '#fdecea' : '#fff3e0';
                           const sColor = f.status === 'Ready for Onboarding' ? '#2e7d32' : f.status === 'Not Interested' ? '#c62828' : '#e65100';
                           return (
@@ -1684,8 +1688,8 @@ export default function Dashboard() {
                     const vKey = getVerifyKey(f);
                     const v = tlFormsModal.verifyMap[vKey];
                     const vStatus = v ? v.status : 'Not Found';
-                    const vColor = vStatus === 'Fully Verified' ? '#2e7d32' : vStatus === 'Partially Done' ? '#e65100' : vStatus === 'Critical Failure' ? '#c62828' : '#757575';
-                    const vBg = vStatus === 'Fully Verified' ? '#e6f4ea' : vStatus === 'Partially Done' ? '#fff3e0' : vStatus === 'Critical Failure' ? '#fdecea' : '#f5f5f5';
+                    const vColor = vStatus === 'Fully Verified' ? '#2e7d32' : vStatus === 'Already Verified' ? '#e65100' : vStatus === 'Partially Done' ? '#e65100' : vStatus === 'Critical Failure' ? '#c62828' : '#757575';
+                    const vBg = vStatus === 'Fully Verified' ? '#e6f4ea' : vStatus === 'Already Verified' ? '#fff3e0' : vStatus === 'Partially Done' ? '#fff3e0' : vStatus === 'Critical Failure' ? '#fdecea' : '#f5f5f5';
                     return (
                       <div key={f._id || fi}
                         onClick={() => setSelectedForm(f)}
@@ -1741,8 +1745,8 @@ export default function Dashboard() {
         // Check both myFormsVerifyMap and tlFormsModal verifyMap for verification data
         const sfVerify = myFormsVerifyMap[sfVKey] || (tlFormsModal && tlFormsModal.verifyMap ? tlFormsModal.verifyMap[sfVKey] : null) || (fseVerifyMap ? fseVerifyMap[sfVKey] : null);
         const sfVStatus = sfVerify ? sfVerify.status : (selectedForm.verificationStatus || 'Not Found');
-        const sfVColor = sfVStatus === 'Fully Verified' ? '#2e7d32' : sfVStatus === 'Partially Done' ? '#e65100' : sfVStatus === 'Critical Failure' ? '#c62828' : '#757575';
-        const sfVBg = sfVStatus === 'Fully Verified' ? '#e6f4ea' : sfVStatus === 'Partially Done' ? '#fff3e0' : sfVStatus === 'Critical Failure' ? '#fdecea' : '#f5f5f5';
+        const sfVColor = sfVStatus === 'Fully Verified' ? '#2e7d32' : sfVStatus === 'Already Verified' ? '#e65100' : sfVStatus === 'Partially Done' ? '#e65100' : sfVStatus === 'Critical Failure' ? '#c62828' : '#757575';
+        const sfVBg = sfVStatus === 'Fully Verified' ? '#e6f4ea' : sfVStatus === 'Already Verified' ? '#fff3e0' : sfVStatus === 'Partially Done' ? '#fff3e0' : sfVStatus === 'Critical Failure' ? '#fdecea' : '#f5f5f5';
         
         const isMyForm = myForms.some(f => f._id === selectedForm._id);
         return (
