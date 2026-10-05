@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { API_BASE } from '../api';
+import { API_BASE, isValidToken } from '../api';
 
-const GOOGLE_CLIENT_ID = '175231524136-39m136pat1dpous6u9eijhfulpmpms1i.apps.googleusercontent.com';
+const GOOGLE_CLIENT_ID = process.env.REACT_APP_GOOGLE_CLIENT_ID;
 
 export default function Login() {
   const navigate = useNavigate();
@@ -11,26 +11,63 @@ export default function Login() {
   const [isWarn,  setIsWarn]  = useState(false);
 
   useEffect(() => {
+    // 1. Check URL parameters and hash fragment
     const params = new URLSearchParams(window.location.search);
-    const tokenFromURL = params.get('token') || params.get('adminToken');
-    const viewAsFromURL = params.get('viewAs');
+    const hashParams = window.location.hash ? new URLSearchParams(window.location.hash.substring(1)) : null;
+    const tokenFromURL = params.get('token') || params.get('adminToken') || (hashParams && (hashParams.get('token') || hashParams.get('adminToken')));
+    const viewAsFromURL = params.get('viewAs') || (hashParams && hashParams.get('viewAs'));
+
     if (tokenFromURL) {
+      // Immediately sanitize address bar & browser history before anything else
+      window.history.replaceState({}, document.title, window.location.pathname);
+
+      // Verify that the token is a real, valid JWT token structure
+      if (!isValidToken(tokenFromURL)) {
+        setError('Invalid or fake authentication token provided. Please log in with Google.');
+        return;
+      }
+
       localStorage.clear();
       sessionStorage.setItem('mgr_impersonationToken', tokenFromURL);
-      localStorage.setItem('token', tokenFromURL);
+      sessionStorage.setItem('token', tokenFromURL);
       if (viewAsFromURL) {
         sessionStorage.setItem('mgr_viewAsEmail', viewAsFromURL);
         localStorage.setItem('viewAsEmail', viewAsFromURL);
         localStorage.setItem('isImpersonating', 'true');
       }
-      navigate('/dashboard');
+      navigate('/dashboard', { replace: true });
       return;
     }
-    if (localStorage.getItem('token')) navigate('/dashboard');
+
+    // 2. Check if impersonation token was already captured by index.html pre-loader
+    const sessImpersonation = sessionStorage.getItem('mgr_impersonationToken');
+    if (sessImpersonation) {
+      if (isValidToken(sessImpersonation)) {
+        navigate('/dashboard', { replace: true });
+        return;
+      } else {
+        sessionStorage.removeItem('mgr_impersonationToken');
+        sessionStorage.removeItem('mgr_viewAsEmail');
+      }
+    }
+
+    const savedToken = sessionStorage.getItem('token') || localStorage.getItem('token');
+    if (savedToken) {
+      if (isValidToken(savedToken)) {
+        navigate('/dashboard', { replace: true });
+      } else {
+        sessionStorage.removeItem('token');
+        localStorage.removeItem('token');
+      }
+    }
   }, [navigate]);
 
   const handleGoogleSignIn = () => {
     setError('');
+    if (!GOOGLE_CLIENT_ID) {
+      setError('Google Client ID is not configured in .env.');
+      return;
+    }
     if (!window.google) { setError('Google Sign-In not loaded. Please refresh.'); return; }
     window.google.accounts.id.initialize({
       client_id: GOOGLE_CLIENT_ID,
@@ -63,8 +100,12 @@ export default function Login() {
         setLoading(false);
         return;
       }
-      localStorage.setItem('token',   data.token);
-      localStorage.setItem('manager', JSON.stringify(data.manager));
+      // Save in sessionStorage (cleared automatically when tab/browser closes)
+      sessionStorage.setItem('token',   data.token);
+      sessionStorage.setItem('manager', JSON.stringify(data.manager));
+      // Remove from permanent localStorage to prevent lingering sessions on shared machines (H2 fix)
+      localStorage.removeItem('token');
+      localStorage.removeItem('manager');
       navigate('/dashboard');
     } catch {
       setError('Server error. Please try again.');

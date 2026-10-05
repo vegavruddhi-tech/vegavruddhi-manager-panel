@@ -36,7 +36,7 @@ function TideMerchantTimeline({ phone, customerName }) {
     setLoading(true);
     setError(null);
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token') || localStorage.getItem('token');
       const res = await fetch(`${EMP_API}/api/tide/merchant-timeline?phone=${encodeURIComponent(phone)}&name=${encodeURIComponent(customerName)}`, {
         headers: { Authorization: `Bearer ${token}` },
       });

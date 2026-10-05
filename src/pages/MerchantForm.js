@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { API_BASE } from '../api';
+import { API_BASE, clearSessionAndLogout } from '../api';
 import { useNavigate, Link } from 'react-router-dom';
 
 /*
@@ -66,7 +66,7 @@ const inputStyle = {
 
 export default function MerchantForm() {
   const navigate  = useNavigate();
-  const token     = localStorage.getItem('token');
+  const token     = sessionStorage.getItem('token') || localStorage.getItem('token');
 
   const [customerName,   setCustomerName]   = useState('');
   const [customerNumber, setCustomerNumber] = useState('');
@@ -102,9 +102,15 @@ export default function MerchantForm() {
   // Fetch Form Config
   useEffect(() => {
     fetch(`${API_BASE}/api/form-config`)
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) throw new Error('Failed to load form config');
+        return r.json();
+      })
       .then(setFormConfig)
-      .catch(console.error);
+      .catch(err => {
+        console.error('Form config error:', err);
+        setError('Failed to load form configuration. Please refresh.');
+      });
   }, []);
 
   const handleDynamicChange = (key, value) => {
@@ -113,10 +119,24 @@ export default function MerchantForm() {
 
   useEffect(() => {
     if (!token) { navigate('/'); return; }
-    const cached = localStorage.getItem('manager');
+    const cached = sessionStorage.getItem('manager') || localStorage.getItem('manager');
     if (cached) { try { setManager(JSON.parse(cached)); } catch {} }
     fetch(`${API_BASE}/api/manager/profile`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json()).then(data => { if (data._id) setManager(data); }).catch(() => {});
+      .then(r => {
+        if (r.status === 401) {
+          clearSessionAndLogout(navigate);
+          return null;
+        }
+        if (!r.ok) throw new Error('Profile load failed');
+        return r.json();
+      })
+      .then(data => {
+        if (data && data._id) setManager(data);
+      })
+      .catch(err => {
+        console.error('Failed to load profile:', err);
+        setError('Failed to verify manager session. Please log in again.');
+      });
   }, [token, navigate]);
 
   const isOnboarding = status === 'Ready for Onboarding';
@@ -126,7 +146,14 @@ export default function MerchantForm() {
   const handleLogout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('manager');
-    navigate('/');
+    localStorage.removeItem('isImpersonating');
+    localStorage.removeItem('viewAsEmail');
+    sessionStorage.removeItem('token');
+    sessionStorage.removeItem('manager');
+    sessionStorage.removeItem('mgr_impersonationToken');
+    sessionStorage.removeItem('mgr_viewAsEmail');
+    sessionStorage.clear();
+    clearSessionAndLogout(navigate);
   };
 
   const handleSubmit = async (e) => {
@@ -172,9 +199,7 @@ export default function MerchantForm() {
       });
       const data = await res.json();
       if (res.status === 401) {
-        localStorage.removeItem('token');
-        localStorage.removeItem('manager');
-        navigate('/');
+        clearSessionAndLogout(navigate);
         return;
       }
       if (res.status === 409 && data.duplicate) {

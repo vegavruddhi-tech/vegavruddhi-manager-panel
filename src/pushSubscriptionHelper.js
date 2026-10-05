@@ -1,4 +1,4 @@
-const PUBLIC_VAPID_KEY = process.env.REACT_APP_PUBLIC_VAPID_KEY || 'BMaBuxmwHuqXDdgHQqht9ULvVJ0-G76Y6EqPB_r0i93t3r_rfClWzy4tTY1cqnbCl43D0KeuV-E2OdKqK44wM7k';
+const PUBLIC_VAPID_KEY = process.env.REACT_APP_PUBLIC_VAPID_KEY;
 
 function urlBase64ToUint8Array(base64String) {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
@@ -18,6 +18,11 @@ function urlBase64ToUint8Array(base64String) {
 export async function subscribeUserToPush(apiBaseUrl, token) {
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
     console.warn('Push messaging is not supported in this browser.');
+    return;
+  }
+
+  if (!PUBLIC_VAPID_KEY) {
+    console.warn('Push messaging public VAPID key is not configured in .env.');
     return;
   }
 

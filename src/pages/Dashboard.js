@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { API_BASE } from '../api';
+import { API_BASE, clearSessionAndLogout } from '../api';
 import TideMerchantTimeline from '../components/TideMerchantTimeline';
 import MeetingsModal from '../components/MeetingsModal';
 import { subscribeUserToPush } from '../pushSubscriptionHelper';
@@ -119,21 +119,32 @@ export default function Dashboard() {
   // Runs inside useState lazy initializer (once, before any render commits)
   const _initImpersonation = () => {
     const params = new URLSearchParams(window.location.search);
-    const viewAs = params.get('viewAs');
-    const urlToken = params.get('token') || params.get('adminToken');
-    if (viewAs && urlToken) {
+    const hashParams = window.location.hash ? new URLSearchParams(window.location.hash.substring(1)) : null;
+    const viewAs = params.get('viewAs') || (hashParams && hashParams.get('viewAs'));
+    const urlToken = params.get('token') || params.get('adminToken') || (hashParams && (hashParams.get('token') || hashParams.get('adminToken')));
+
+    if (urlToken) {
+      // Immediately sanitize URL from address bar and history
+      params.delete('token');
+      params.delete('adminToken');
+      if (viewAs) params.delete('viewAs');
+      const cleanSearch = params.toString();
+      const cleanUrl = window.location.pathname + (cleanSearch ? '?' + cleanSearch : '');
+      window.history.replaceState({}, document.title, cleanUrl);
+
       sessionStorage.setItem('mgr_impersonationToken', urlToken);
-      sessionStorage.setItem('mgr_viewAsEmail', viewAs);
       localStorage.setItem('token', urlToken);
-      localStorage.setItem('viewAsEmail', viewAs);
-      localStorage.setItem('isImpersonating', 'true');
-      window.history.replaceState({}, '', window.location.pathname);
-      return { isAdminView: true, adminViewEmail: viewAs, impersonationToken: urlToken };
+      if (viewAs) {
+        sessionStorage.setItem('mgr_viewAsEmail', viewAs);
+        localStorage.setItem('viewAsEmail', viewAs);
+        localStorage.setItem('isImpersonating', 'true');
+      }
+      return { isAdminView: !!viewAs, adminViewEmail: viewAs || '', impersonationToken: urlToken };
     }
     const sessToken = sessionStorage.getItem('mgr_impersonationToken') || (localStorage.getItem('isImpersonating') === 'true' ? localStorage.getItem('token') : null);
     const sessEmail = sessionStorage.getItem('mgr_viewAsEmail') || localStorage.getItem('viewAsEmail');
-    if (sessToken && sessEmail) {
-      return { isAdminView: true, adminViewEmail: sessEmail, impersonationToken: sessToken };
+    if (sessToken) {
+      return { isAdminView: !!sessEmail, adminViewEmail: sessEmail || '', impersonationToken: sessToken };
     }
     return { isAdminView: false, adminViewEmail: '', impersonationToken: null };
   };
@@ -142,12 +153,14 @@ export default function Dashboard() {
   const [adminViewEmail] = useState(() => _initImpersonation().adminViewEmail);
   const [impersonationToken] = useState(() => _initImpersonation().impersonationToken);
 
-  const activeToken = isAdminView ? impersonationToken : localStorage.getItem('token');
+  const activeToken = isAdminView ? impersonationToken : (sessionStorage.getItem('token') || localStorage.getItem('token'));
   const fetchedRef = React.useRef(false);
 
   const handleExitAdminView = () => {
     sessionStorage.removeItem('mgr_impersonationToken');
     sessionStorage.removeItem('mgr_viewAsEmail');
+    localStorage.removeItem('isImpersonating');
+    localStorage.removeItem('viewAsEmail');
     if (window.opener && !window.opener.closed) {
       window.close();
     } else {
@@ -239,13 +252,17 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
-    const token = activeToken || localStorage.getItem('token');
-    if (!token) return;
+    const token = activeToken || sessionStorage.getItem('token') || localStorage.getItem('token');
+    if (!token) {
+      setLoading(false);
+      if (!isAdminView) navigate('/');
+      return;
+    }
     if (fetchedRef.current) return;
     fetchedRef.current = true;
 
     // Try cached data first for instant render
-    const cached = localStorage.getItem('manager');
+    const cached = sessionStorage.getItem('manager') || localStorage.getItem('manager');
     if (cached) {
       try { setManager(JSON.parse(cached)); } catch {}
     }
@@ -256,6 +273,7 @@ export default function Dashboard() {
     })
       .then(r => {
         if (r.status === 401 && !isAdminView) { handleUnauthorized(); return null; }
+        if (!r.ok) { setError('Failed to load profile. Please log in again.'); return null; }
         return r.json();
       })
       .then(data => {
@@ -267,14 +285,17 @@ export default function Dashboard() {
           setError(data.message);
         }
       })
-      .catch(() => setError('Failed to load profile.'))
+      .catch(() => setError('Failed to load profile. Please check your connection.'))
       .finally(() => setLoading(false));
 
     // Fetch Team Leaders under this manager
     fetch(`${API_BASE}/api/manager/my-tls`, {
       headers: { Authorization: `Bearer ${token}` },
     })
-      .then(r => r.json())
+      .then(r => {
+        if (r.status === 401 && !isAdminView) { handleUnauthorized(); return null; }
+        return r.json();
+      })
       .then(data => {
         if (Array.isArray(data)) {
           setTls(data);
@@ -284,7 +305,8 @@ export default function Dashboard() {
       .finally(() => setTlsLoading(false));
 
     // Fetch KPIs (show cached instantly, refresh in background)
-    const cachedKpis = localStorage.getItem('manager_kpis');
+    try { localStorage.removeItem('manager_kpis'); } catch {}
+    const cachedKpis = sessionStorage.getItem('manager_kpis');
     if (cachedKpis) { try { setKpis(JSON.parse(cachedKpis)); } catch {} }
     fetch(`${API_BASE}/api/manager/kpis`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -296,7 +318,7 @@ export default function Dashboard() {
       .then(data => {
         if (data) {
           setKpis(data);
-          try { localStorage.setItem('manager_kpis', JSON.stringify(data)); } catch {}
+          try { sessionStorage.setItem('manager_kpis', JSON.stringify(data)); } catch {}
           // Background: update verification counts after page renders
           setTimeout(async () => {
             try {
@@ -320,18 +342,22 @@ export default function Dashboard() {
 
     // Fetch manager's own forms
     setMyFormsLoading(true);
-    const cachedMyForms = localStorage.getItem('manager_my_forms');
+    try { localStorage.removeItem('manager_my_forms'); } catch {}
+    const cachedMyForms = sessionStorage.getItem('manager_my_forms');
     if (cachedMyForms) {
       try { setMyForms(JSON.parse(cachedMyForms)); setMyFormsLoading(false); } catch {}
     }
     fetch(`${API_BASE}/api/manager/my-forms`, {
       headers: { Authorization: `Bearer ${token}` },
     })
-      .then(r => r.json())
+      .then(r => {
+        if (r.status === 401 && !isAdminView) { handleUnauthorized(); return null; }
+        return r.json();
+      })
       .then(async (data) => {
         if (Array.isArray(data)) {
           setMyForms(data);
-          try { localStorage.setItem('manager_my_forms', JSON.stringify(data)); } catch {}
+          try { sessionStorage.setItem('manager_my_forms', JSON.stringify(data)); } catch {}
           // Fetch verification for my forms
           if (data.length > 0) {
             try {
@@ -357,7 +383,7 @@ export default function Dashboard() {
   }, [isAdminView]);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
+    const token = activeToken || sessionStorage.getItem('token') || localStorage.getItem('token');
     const email = manager?.email;
     if (!token || !email) return;
     const refreshMeetings = () => {
@@ -379,30 +405,19 @@ export default function Dashboard() {
 
   // Subscribe to push notifications when profile is loaded
   useEffect(() => {
-    const token = localStorage.getItem('token');
+    const token = activeToken || sessionStorage.getItem('token') || localStorage.getItem('token');
     if (token && manager) {
       subscribeUserToPush(API_BASE, token);
     }
   }, [manager]);
 
   const handleLogout = () => {
-    // Clear all manager caches
-    Object.keys(localStorage).forEach(k => {
-      if (k.startsWith('fse_stats_') || k === 'manager_my_forms' || k === 'manager_kpis') localStorage.removeItem(k);
-    });
-    localStorage.removeItem('token');
-    localStorage.removeItem('manager');
-    navigate('/');
+    clearSessionAndLogout(navigate);
   };
 
   const handleUnauthorized = () => {
     if (isAdminView) return;
-    Object.keys(localStorage).forEach(k => {
-      if (k.startsWith('fse_stats_') || k === 'manager_my_forms') localStorage.removeItem(k);
-    });
-    localStorage.removeItem('token');
-    localStorage.removeItem('manager');
-    navigate('/');
+    clearSessionAndLogout(navigate);
   };
 
   const initials = (name) =>
@@ -413,11 +428,12 @@ export default function Dashboard() {
     setShowFSEModal(true);
     setFseStats({});
 
-    const token = localStorage.getItem('token');
+    const token = activeToken || sessionStorage.getItem('token') || localStorage.getItem('token');
     const cacheKey = `fse_stats_v3_${tl._id}_${selYear}_${selMonth}`;
 
-    // Load from cache instantly (max 30 min old)
-    const cached = localStorage.getItem(cacheKey);
+    // Load from session cache instantly (max 30 min old)
+    try { localStorage.removeItem(cacheKey); } catch {}
+    const cached = sessionStorage.getItem(cacheKey);
     if (cached) {
       try {
         const { fses: cachedFses, stats: cachedStats, forms: cachedForms, verifyMap: cachedVerifyMap, ts } = JSON.parse(cached);
@@ -429,13 +445,13 @@ export default function Dashboard() {
           if (cachedVerifyMap) setFseVerifyMap(cachedVerifyMap);
           setFsesLoading(false);
         } else {
-          localStorage.removeItem(cacheKey);
+          sessionStorage.removeItem(cacheKey);
           setFsesLoading(true);
           setFses([]);
           setFseForms([]);
         }
       } catch {
-        setFsesLoading(true);
+        setFsesLoading(false);
         setFses([]);
         setFseForms([]);
       }
@@ -498,9 +514,9 @@ export default function Dashboard() {
         setFseStats(statsMap);
         setFseVerifyMap(verifyMap);
 
-        // Cache
+        // Cache in session storage only
         try {
-          localStorage.setItem(cacheKey, JSON.stringify({ fses: fseData, stats: statsMap, forms: formsData, verifyMap, ts: Date.now() }));
+          sessionStorage.setItem(cacheKey, JSON.stringify({ fses: fseData, stats: statsMap, forms: formsData, verifyMap, ts: Date.now() }));
         } catch {}
       }
     } catch (err) {
@@ -522,7 +538,7 @@ export default function Dashboard() {
 
   const handleTLFormsClick = async (tl) => {
     setTlFormsModal({ tl, forms: [], verifyMap: {}, loading: true });
-    const token = localStorage.getItem('token');
+    const token = activeToken || sessionStorage.getItem('token') || localStorage.getItem('token');
     try {
       const res = await fetch(`${API_BASE}/api/manager/tl/${tl._id}/tl-forms?year=${selYear}&month=${selMonth}`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -567,7 +583,7 @@ export default function Dashboard() {
       .then(data => {
         if (data) {
           setKpis(data);
-          try { localStorage.setItem('manager_kpis', JSON.stringify(data)); } catch {}
+          try { sessionStorage.setItem('manager_kpis', JSON.stringify(data)); } catch {}
           setTimeout(async () => {
             try {
               const formsRes = await fetch(`${API_BASE}/api/manager/kpi-detail?type=totalForms&${params.toString()}`, { headers: { Authorization: `Bearer ${token}` } });
@@ -603,7 +619,7 @@ export default function Dashboard() {
   const handleKpiClick = async (type, title) => {
     setKpiModal({ title, type, data: null, loading: true });
     setKpiSearch('');
-    const token = localStorage.getItem('token');
+    const token = activeToken || sessionStorage.getItem('token') || localStorage.getItem('token');
     try {
       const params = new URLSearchParams();
       if (dateFilter && dateFilter !== 'all') params.set('dateFilter', dateFilter);
@@ -632,7 +648,7 @@ export default function Dashboard() {
   const openDelete = () => {
     const reason = window.prompt(`Reason for deleting "${selectedForm?.customerName}"? (required)`);
     if (!reason?.trim()) return;
-    const token = localStorage.getItem('token');
+    const token = activeToken || sessionStorage.getItem('token') || localStorage.getItem('token');
     fetch(`${API_BASE}/api/requests/merchant-delete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
@@ -643,7 +659,7 @@ export default function Dashboard() {
   const sendRequest = async () => {
     if (!reqForm.reason.trim()) { setReqError('Please provide a reason.'); return; }
     setReqSaving(true); setReqError('');
-    const token = localStorage.getItem('token');
+    const token = activeToken || sessionStorage.getItem('token') || localStorage.getItem('token');
     try {
       const res  = await fetch(`${API_BASE}/api/requests/merchant-edit`, {
         method: 'POST',
@@ -662,6 +678,22 @@ export default function Dashboard() {
     return (
       <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' }}>
         <div className="merchants-loading" style={{ width: 200 }}>Loading…</div>
+      </div>
+    );
+  }
+
+  if (!manager && !loading) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)', gap: 16 }}>
+        <div style={{ fontSize: 16, fontWeight: 600, color: '#e53935' }}>
+          {error || 'Failed to load manager dashboard. Please check your connection or log in again.'}
+        </div>
+        <button
+          onClick={() => { clearSessionAndLogout(navigate); }}
+          style={{ padding: '10px 20px', borderRadius: 8, background: '#1a4731', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 600 }}
+        >
+          Go to Login
+        </button>
       </div>
     );
   }
@@ -1005,7 +1037,7 @@ export default function Dashboard() {
                   <button key={f} className={`date-filter-btn${dateFilter === f ? ' active' : ''}`}
                     onClick={() => {
                       setDateFilter(f); setFromDate(''); setToDate('');
-                      fetchKpis(localStorage.getItem('token'), f, '', toDate, selYear, selMonth);
+                      fetchKpis(activeToken || sessionStorage.getItem('token') || localStorage.getItem('token'), f, '', toDate, selYear, selMonth);
                     }}>
                     {f === 'all' ? 'All' : f === 'today' ? 'Today' : 'This Week'}
                   </button>
@@ -1016,12 +1048,12 @@ export default function Dashboard() {
                   <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} />
                   <button className="date-filter-btn" onClick={() => {
                     setDateFilter('custom');
-                    fetchKpis(localStorage.getItem('token'), 'custom', fromDate, toDate, selYear, selMonth);
+                    fetchKpis(activeToken || sessionStorage.getItem('token') || localStorage.getItem('token'), 'custom', fromDate, toDate, selYear, selMonth);
                   }}>Apply</button>
                 </div>
                 <div style={{ position: 'relative', display: 'inline-block' }}>
                   <span style={{ position: 'absolute', top: -9, left: 10, fontSize: 11, color: '#40916c', background: '#fff', padding: '0 4px', fontWeight: 600, zIndex: 1, pointerEvents: 'none' }}>Year</span>
-                  <select value={selYear} onChange={e => { setSelYear(e.target.value); fetchKpis(localStorage.getItem('token'), dateFilter, fromDate, toDate, e.target.value, selMonth); }}
+                  <select value={selYear} onChange={e => { setSelYear(e.target.value); fetchKpis(activeToken || sessionStorage.getItem('token') || localStorage.getItem('token'), dateFilter, fromDate, toDate, e.target.value, selMonth); }}
                     style={{ padding: '10px 32px 10px 12px', borderRadius: 10, border: '1.5px solid #40916c', fontSize: 14, color: selYear ? '#1a4731' : '#888', background: '#fff', cursor: 'pointer', appearance: 'none', minWidth: 100, outline: 'none' }}>
                     <option value=""></option>
                     {[2026,2025,2024,2023,2022,2021].map(y => <option key={y} value={y}>{y}</option>)}
@@ -1030,7 +1062,7 @@ export default function Dashboard() {
                 </div>
                 <div style={{ position: 'relative', display: 'inline-block' }}>
                   <span style={{ position: 'absolute', top: -9, left: 10, fontSize: 11, color: '#40916c', background: '#fff', padding: '0 4px', fontWeight: 600, zIndex: 1, pointerEvents: 'none' }}>Month</span>
-                  <select value={selMonth} onChange={e => { setSelMonth(e.target.value); fetchKpis(localStorage.getItem('token'), dateFilter, fromDate, toDate, selYear, e.target.value); }}
+                  <select value={selMonth} onChange={e => { setSelMonth(e.target.value); fetchKpis(activeToken || sessionStorage.getItem('token') || localStorage.getItem('token'), dateFilter, fromDate, toDate, selYear, e.target.value); }}
                     style={{ padding: '10px 32px 10px 12px', borderRadius: 10, border: '1.5px solid #40916c', fontSize: 14, color: selMonth !== '' ? '#1a4731' : '#888', background: '#fff', cursor: 'pointer', appearance: 'none', minWidth: 130, outline: 'none' }}>
                     <option value="">All Months</option>
                     {['January','February','March','April','May','June','July','August','September','October','November','December'].map((m,i) => (
@@ -1048,7 +1080,7 @@ export default function Dashboard() {
                     setToDate('');
                     setSelYear(currentYear);
                     setSelMonth(currentMonth);
-                    fetchKpis(localStorage.getItem('token'), 'all', '', '', currentYear, currentMonth);
+                    fetchKpis(activeToken || sessionStorage.getItem('token') || localStorage.getItem('token'), 'all', '', '', currentYear, currentMonth);
                   }}
                   style={{
                     padding: '10px 16px', borderRadius: 10, border: '1.5px solid #e53935',
@@ -1840,7 +1872,7 @@ export default function Dashboard() {
           isOpen={meetingsOpen}
           onClose={() => setMeetingsOpen(false)}
           userEmail={manager?.email}
-          token={localStorage.getItem('token')}
+          token={activeToken || sessionStorage.getItem('token') || localStorage.getItem('token')}
         />
       )}
 

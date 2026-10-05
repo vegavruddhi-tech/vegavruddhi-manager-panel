@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { API_BASE } from '../api';
+import { API_BASE, clearSessionAndLogout } from '../api';
 
 export default function Profile() {
   const navigate = useNavigate();
@@ -19,7 +19,7 @@ export default function Profile() {
   const [pfSaving, setPfSaving] = useState(false);
 
   const loadProfile = () => {
-    const token = localStorage.getItem('token');
+    const token = sessionStorage.getItem('token') || localStorage.getItem('token');
     if (!token) {
       navigate('/');
       return;
@@ -42,7 +42,7 @@ export default function Profile() {
   };
 
   const loadMyRequest = () => {
-    const token = localStorage.getItem('token');
+    const token = sessionStorage.getItem('token') || localStorage.getItem('token');
     fetch(`${API_BASE}/api/manager/my-request`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.json()).then(setMyRequest).catch(console.error);
   };
@@ -56,7 +56,14 @@ export default function Profile() {
   const handleLogout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('manager');
-    navigate('/');
+    localStorage.removeItem('isImpersonating');
+    localStorage.removeItem('viewAsEmail');
+    sessionStorage.removeItem('token');
+    sessionStorage.removeItem('manager');
+    sessionStorage.removeItem('mgr_impersonationToken');
+    sessionStorage.removeItem('mgr_viewAsEmail');
+    sessionStorage.clear();
+    clearSessionAndLogout(navigate);
   };
 
   const openReqModal = () => {
@@ -78,7 +85,7 @@ export default function Profile() {
     }
     setPfSaving(true); 
     setPfErr('');
-    const token = localStorage.getItem('token');
+    const token = sessionStorage.getItem('token') || localStorage.getItem('token');
     try {
       const res = await fetch(`${API_BASE}/api/manager/request-edit`, {
         method: 'POST',
